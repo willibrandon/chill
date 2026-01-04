@@ -1,5 +1,6 @@
-# Application binary
+# Application binaries
 chill
+chill.exe
 
 # Claude AI files
 .claude/

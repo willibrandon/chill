@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Build
+        run: go build -v .
+
+      - name: Install mpv and yt-dlp (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv
+          pip install yt-dlp
+
+      - name: Install mpv and yt-dlp (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install mpv yt-dlp
+
+      - name: Install mpv and yt-dlp (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install mpv yt-dlp -y
+
+      - name: Test --list
+        run: ./chill --list
+        shell: bash
+
+      - name: Test playback (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Start playing in background
+          ./chill &
+          sleep 5
+          # Check status
+          ./chill --status
+          # Stop playback
+          ./chill --stop
+        shell: bash
+
+      - name: Test playback (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Start playing in background
+          ./chill &
+          sleep 5
+          # Check status
+          ./chill --status
+          # Stop playback
+          ./chill --stop
+        shell: bash
+
+      - name: Test playback (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          # Start playing in background
+          Start-Process -FilePath ".\chill.exe" -NoNewWindow
+          Start-Sleep -Seconds 5
+          # Check status
+          .\chill.exe --status
+          # Stop playback
+          .\chill.exe --stop
+        shell: pwsh

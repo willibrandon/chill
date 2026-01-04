@@ -11,10 +11,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -38,18 +36,9 @@ type Status struct {
 	Uptime  string `json:"uptime,omitempty"`  // how long current station has been playing
 }
 
-// socketPath returns the path to the Unix socket used for IPC.
-// The socket is user-specific to allow multiple users on the same system.
-func socketPath() string {
-	return filepath.Join(os.TempDir(), fmt.Sprintf("chill-%d.sock", os.Getuid()))
-}
-
 // Start initializes the daemon and begins listening for client connections.
 func (d *Daemon) Start() error {
-	sock := socketPath()
-	os.Remove(sock) // clean up old socket
-
-	ln, err := net.Listen("unix", sock)
+	ln, err := listenSocket()
 	if err != nil {
 		return err
 	}
@@ -91,7 +80,7 @@ func (d *Daemon) handle(conn net.Conn) {
 
 		if action == "stop" || action == "quit" {
 			d.listener.Close()
-			os.Remove(socketPath())
+			cleanupSocket()
 			os.Exit(0)
 		}
 	}
@@ -165,7 +154,9 @@ func (d *Daemon) pause() string {
 	if d.cmd == nil || d.cmd.Process == nil {
 		return "nothing playing"
 	}
-	d.cmd.Process.Signal(syscall.SIGSTOP)
+	if err := pauseProcess(d.cmd.Process); err != nil {
+		return err.Error()
+	}
 	d.paused = true
 	return "paused"
 }
@@ -174,7 +165,9 @@ func (d *Daemon) resume() string {
 	if d.cmd == nil || d.cmd.Process == nil {
 		return "nothing playing"
 	}
-	d.cmd.Process.Signal(syscall.SIGCONT)
+	if err := resumeProcess(d.cmd.Process); err != nil {
+		return err.Error()
+	}
 	d.paused = false
 	return "resumed"
 }
@@ -248,9 +241,9 @@ func runDaemon() {
 }
 
 // isDaemonRunning checks if a daemon is already running by attempting
-// to connect to the Unix socket.
+// to connect to the socket.
 func isDaemonRunning() bool {
-	conn, err := net.Dial("unix", socketPath())
+	conn, err := dialSocket()
 	if err != nil {
 		return false
 	}

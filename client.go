@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,7 +15,7 @@ import (
 
 // sendCommand sends a command to the daemon and returns the response.
 func sendCommand(cmd string) (string, error) {
-	conn, err := net.Dial("unix", socketPath())
+	conn, err := dialSocket()
 	if err != nil {
 		return "", err
 	}
