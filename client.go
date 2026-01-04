@@ -1,3 +1,6 @@
+// client.go implements the CLI client that communicates with the daemon.
+// It sends commands over a Unix socket and displays responses to the user.
+
 package main
 
 import (
@@ -11,6 +14,7 @@ import (
 	"time"
 )
 
+// sendCommand sends a command to the daemon and returns the response.
 func sendCommand(cmd string) (string, error) {
 	conn, err := net.Dial("unix", socketPath())
 	if err != nil {
@@ -34,6 +38,8 @@ func sendCommand(cmd string) (string, error) {
 	return strings.TrimSpace(response), nil
 }
 
+// ensureDaemon starts the daemon if it's not already running.
+// It waits up to 2 seconds for the daemon to become ready.
 func ensureDaemon() error {
 	if isDaemonRunning() {
 		return nil
@@ -61,6 +67,7 @@ func ensureDaemon() error {
 	return fmt.Errorf("daemon failed to start")
 }
 
+// clientPlay starts playing the specified station via the daemon.
 func clientPlay(station string) {
 	if err := ensureDaemon(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -81,6 +88,7 @@ func clientPlay(station string) {
 	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
 }
 
+// clientStatus displays the current playback status.
 func clientStatus() {
 	if !isDaemonRunning() {
 		fmt.Println(dim + "not running" + reset)
@@ -113,6 +121,7 @@ func clientStatus() {
 	fmt.Printf("  %s%s │ %s%s\n", dim, s.Station, s.Uptime, reset)
 }
 
+// clientToggle pauses if playing, resumes if paused, or starts playing if stopped.
 func clientToggle() {
 	if !isDaemonRunning() {
 		clientPlay("lofi-girl")
@@ -132,6 +141,7 @@ func clientToggle() {
 	}
 }
 
+// clientSkip skips to a random different station.
 func clientSkip() {
 	if err := ensureDaemon(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -147,6 +157,7 @@ func clientSkip() {
 	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
 }
 
+// clientStop stops playback and terminates the daemon.
 func clientStop() {
 	if !isDaemonRunning() {
 		fmt.Println(dim + "not running" + reset)

@@ -1,3 +1,6 @@
+// daemon.go implements the background daemon that manages mpv playback.
+// The daemon listens on a Unix socket and accepts commands from clients.
+
 package main
 
 import (
@@ -15,27 +18,33 @@ import (
 	"time"
 )
 
+// Daemon manages the mpv subprocess and handles client commands.
+// It maintains playback state and communicates over a Unix socket.
 type Daemon struct {
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	station   *Station
-	paused    bool
-	startedAt time.Time
-	listener  net.Listener
+	mu        sync.Mutex   // protects all fields
+	cmd       *exec.Cmd    // mpv process
+	station   *Station     // currently playing station
+	paused    bool         // whether playback is paused
+	startedAt time.Time    // when current station started
+	listener  net.Listener // Unix socket listener
 }
 
+// Status represents the current playback state, serialized as JSON for clients.
 type Status struct {
-	Playing   bool   `json:"playing"`
-	Paused    bool   `json:"paused"`
-	Station   string `json:"station,omitempty"`
-	Desc      string `json:"desc,omitempty"`
-	Uptime    string `json:"uptime,omitempty"`
+	Playing bool   `json:"playing"`          // true if actively playing
+	Paused  bool   `json:"paused"`           // true if paused
+	Station string `json:"station,omitempty"` // station name
+	Desc    string `json:"desc,omitempty"`    // station description
+	Uptime  string `json:"uptime,omitempty"`  // how long current station has been playing
 }
 
+// socketPath returns the path to the Unix socket used for IPC.
+// The socket is user-specific to allow multiple users on the same system.
 func socketPath() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("chill-%d.sock", os.Getuid()))
 }
 
+// Start initializes the daemon and begins listening for client connections.
 func (d *Daemon) Start() error {
 	sock := socketPath()
 	os.Remove(sock) // clean up old socket
@@ -223,6 +232,7 @@ func (d *Daemon) listStations() string {
 	return strings.Join(names, " ")
 }
 
+// runDaemon starts the daemon process and blocks forever.
 func runDaemon() {
 	d := &Daemon{}
 	if err := d.Start(); err != nil {
@@ -237,6 +247,8 @@ func runDaemon() {
 	select {}
 }
 
+// isDaemonRunning checks if a daemon is already running by attempting
+// to connect to the Unix socket.
 func isDaemonRunning() bool {
 	conn, err := net.Dial("unix", socketPath())
 	if err != nil {

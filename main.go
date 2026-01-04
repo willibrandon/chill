@@ -1,3 +1,15 @@
+// Package main implements chill, a terminal lofi radio that streams
+// 24/7 lofi beats from YouTube. It uses a client-server architecture
+// where a background daemon manages mpv playback and clients communicate
+// over a Unix socket.
+//
+// Usage:
+//
+//	chill              # play default station
+//	chill chillhop     # play specific station
+//	chill -i           # interactive mode (repl)
+//	chill --status     # show what's playing
+//	chill --stop       # stop playback
 package main
 
 import (
@@ -27,6 +39,7 @@ var logo = `
 ` + purple + `        ╰──────────────────╯` + reset + `
 `
 
+// vibes contains random taglines displayed during playback.
 var vibes = []string{
 	"late night coding session",
 	"3am thoughts",
@@ -45,12 +58,14 @@ var vibes = []string{
 	"git push & chill",
 }
 
+// Station represents a lofi radio stream with a name, YouTube URL, and description.
 type Station struct {
-	Name string
-	URL  string
-	Desc string
+	Name string // short identifier (e.g., "lofi-girl")
+	URL  string // YouTube video/stream URL
+	Desc string // human-readable description
 }
 
+// stations contains the available 24/7 lofi radio streams.
 var stations = []Station{
 	{"lofi-girl", "https://www.youtube.com/watch?v=jfKfPfyJRdk", "Lofi Girl - beats to relax/study to"},
 	{"chillhop", "https://www.youtube.com/watch?v=5yx6BWlEVcY", "Chillhop Radio - jazzy & lofi hip hop"},
@@ -127,6 +142,7 @@ func main() {
 	}
 }
 
+// printStations displays all available stations and usage information.
 func printStations() {
 	fmt.Print(logo)
 	fmt.Println(dim + "  available stations:" + reset)
@@ -148,6 +164,8 @@ func printStations() {
 	fmt.Println()
 }
 
+// findStation returns the station with the given name (case-insensitive),
+// or nil if no matching station is found.
 func findStation(name string) *Station {
 	name = strings.ToLower(name)
 	for _, s := range stations {
@@ -158,6 +176,8 @@ func findStation(name string) *Station {
 	return nil
 }
 
+// playForeground plays a station in foreground mode with mpv's interactive
+// terminal interface, allowing volume control, seeking, and other mpv keybindings.
 func playForeground(s *Station) {
 	vibe := vibes[randInt(len(vibes))]
 

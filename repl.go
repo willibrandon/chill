@@ -1,3 +1,6 @@
+// repl.go implements an interactive REPL with tab completion using go-prompt.
+// Users can type commands like "play chillhop" or just station names directly.
+
 package main
 
 import (
@@ -8,6 +11,7 @@ import (
 	prompt "github.com/c-bata/go-prompt"
 )
 
+// suggestions contains the available REPL commands for tab completion.
 var suggestions = []prompt.Suggest{
 	{Text: "play", Description: "play a station"},
 	{Text: "skip", Description: "skip to random station"},
@@ -20,6 +24,7 @@ var suggestions = []prompt.Suggest{
 	{Text: "quit", Description: "exit chill"},
 }
 
+// stationSuggestions returns station names as completion suggestions.
 func stationSuggestions() []prompt.Suggest {
 	var s []prompt.Suggest
 	for _, st := range stations {
@@ -28,6 +33,7 @@ func stationSuggestions() []prompt.Suggest {
 	return s
 }
 
+// completer provides tab completion for REPL commands and station names.
 func completer(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	words := strings.Fields(text)
@@ -57,6 +63,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 	return nil
 }
 
+// executor handles REPL input by parsing commands and delegating to the daemon.
 func executor(input string) {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -159,6 +166,7 @@ func executor(input string) {
 	}
 }
 
+// runRepl starts the interactive REPL with go-prompt.
 func runRepl() {
 	fmt.Print(logo)
 	fmt.Printf("%s  type 'list' for stations, 'quit' to exit%s\n\n", dim, reset)

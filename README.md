@@ -15,10 +15,10 @@ Terminal lofi radio. Streams the best 24/7 lofi beats from YouTube.
 brew install mpv yt-dlp
 
 # install chill
-go install github.com/yourusername/chill@latest
+go install github.com/willibrandon/chill@latest
 
 # or build from source
-git clone https://github.com/yourusername/chill
+git clone https://github.com/willibrandon/chill
 cd chill
 go install .
 ```
