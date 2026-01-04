@@ -78,6 +78,7 @@ func forEachThread(pid uint32, fn func(threadID uint32) error) error {
 	return nil
 }
 
+// suspendThread suspends a single thread by its ID.
 func suspendThread(threadID uint32) error {
 	handle, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, threadID)
 	if err != nil {
@@ -92,6 +93,7 @@ func suspendThread(threadID uint32) error {
 	return nil
 }
 
+// resumeThread resumes a single suspended thread by its ID.
 func resumeThread(threadID uint32) error {
 	handle, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, threadID)
 	if err != nil {
