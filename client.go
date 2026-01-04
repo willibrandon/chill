@@ -1,0 +1,162 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+func sendCommand(cmd string) (string, error) {
+	conn, err := net.Dial("unix", socketPath())
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	_, err = conn.Write([]byte(cmd + "\n"))
+	if err != nil {
+		return "", err
+	}
+
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(response), nil
+}
+
+func ensureDaemon() error {
+	if isDaemonRunning() {
+		return nil
+	}
+
+	// start daemon in background
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "--daemon")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// wait for daemon to be ready
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if isDaemonRunning() {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("daemon failed to start")
+}
+
+func clientPlay(station string) {
+	if err := ensureDaemon(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd := "play"
+	if station != "" {
+		cmd += " " + station
+	}
+
+	resp, err := sendCommand(cmd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
+}
+
+func clientStatus() {
+	if !isDaemonRunning() {
+		fmt.Println(dim + "not running" + reset)
+		return
+	}
+
+	resp, err := sendCommand("status")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var s Status
+	if err := json.Unmarshal([]byte(resp), &s); err != nil {
+		fmt.Println(resp)
+		return
+	}
+
+	if !s.Playing && !s.Paused {
+		fmt.Println(dim + "idle" + reset)
+		return
+	}
+
+	state := purple + "▶" + reset
+	if s.Paused {
+		state = dim + "⏸" + reset
+	}
+
+	fmt.Printf("%s %s%s%s\n", state, pink, s.Desc, reset)
+	fmt.Printf("  %s%s │ %s%s\n", dim, s.Station, s.Uptime, reset)
+}
+
+func clientToggle() {
+	if !isDaemonRunning() {
+		clientPlay("lofi-girl")
+		return
+	}
+
+	resp, err := sendCommand("toggle")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if resp == "paused" {
+		fmt.Printf("%s⏸ paused%s\n", dim, reset)
+	} else {
+		fmt.Printf("%s▶ resumed%s\n", purple, reset)
+	}
+}
+
+func clientSkip() {
+	if err := ensureDaemon(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := sendCommand("skip")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
+}
+
+func clientStop() {
+	if !isDaemonRunning() {
+		fmt.Println(dim + "not running" + reset)
+		return
+	}
+
+	_, err := sendCommand("stop")
+	if err != nil {
+		// daemon exited, that's fine
+	}
+
+	fmt.Println(dim + "~ stay chill ~" + reset)
+}

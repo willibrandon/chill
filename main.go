@@ -13,12 +13,12 @@ import (
 )
 
 const (
-	reset   = "\033[0m"
-	dim     = "\033[2m"
-	purple  = "\033[38;5;183m"
-	pink    = "\033[38;5;218m"
-	blue    = "\033[38;5;117m"
-	cyan    = "\033[38;5;159m"
+	reset  = "\033[0m"
+	dim    = "\033[2m"
+	purple = "\033[38;5;183m"
+	pink   = "\033[38;5;218m"
+	blue   = "\033[38;5;117m"
+	cyan   = "\033[38;5;159m"
 )
 
 var logo = `
@@ -60,28 +60,71 @@ var stations = []Station{
 	{"study", "https://www.youtube.com/watch?v=7NOSDKb0HlU", "Lofi - beats to study/relax to"},
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func randInt(n int) int {
+	return rand.Intn(n)
+}
+
 func main() {
-	list := flag.Bool("list", false, "list available stations")
-	station := flag.String("station", "lofi-girl", "station to play")
+	// commands
+	daemon := flag.Bool("daemon", false, "run as daemon")
+	repl := flag.Bool("i", false, "interactive mode (repl)")
+	list := flag.Bool("list", false, "list stations")
+	status := flag.Bool("status", false, "show current status")
+	toggle := flag.Bool("toggle", false, "toggle play/pause")
+	skip := flag.Bool("skip", false, "skip to random station")
+	stop := flag.Bool("stop", false, "stop playback")
+	fg := flag.Bool("fg", false, "run in foreground (no daemon)")
+
+	// options
+	station := flag.String("station", "", "station to play")
+
 	flag.Parse()
 
-	if *list {
+	switch {
+	case *daemon:
+		runDaemon()
+	case *repl:
+		runRepl()
+	case *list:
 		printStations()
-		return
+	case *status:
+		clientStatus()
+	case *toggle:
+		clientToggle()
+	case *skip:
+		clientSkip()
+	case *stop:
+		clientStop()
+	case *fg:
+		// foreground mode (original behavior)
+		s := *station
+		if s == "" && flag.NArg() > 0 {
+			s = flag.Arg(0)
+		}
+		if s == "" {
+			s = "lofi-girl"
+		}
+		st := findStation(s)
+		if st == nil {
+			fmt.Fprintf(os.Stderr, "unknown station: %s\n", s)
+			os.Exit(1)
+		}
+		playForeground(st)
+	default:
+		// default: play via daemon
+		s := *station
+		if s == "" && flag.NArg() > 0 {
+			s = flag.Arg(0)
+		}
+		if s == "" {
+			s = "lofi-girl"
+		}
+		clientPlay(s)
 	}
-
-	if flag.NArg() > 0 {
-		*station = flag.Arg(0)
-	}
-
-	s := findStation(*station)
-	if s == nil {
-		fmt.Fprintf(os.Stderr, "unknown station: %s\n", *station)
-		fmt.Fprintf(os.Stderr, "use --list to see available stations\n")
-		os.Exit(1)
-	}
-
-	play(s)
 }
 
 func printStations() {
@@ -91,6 +134,17 @@ func printStations() {
 	for _, s := range stations {
 		fmt.Printf("    %s%-16s%s  %s%s%s\n", cyan, s.Name, reset, dim, s.Desc, reset)
 	}
+	fmt.Println()
+	fmt.Println(dim + "  usage:" + reset)
+	fmt.Println()
+	fmt.Printf("    %schill%s              %splay default station%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill chillhop%s     %splay specific station%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill -i%s           %sinteractive mode (repl)%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --skip%s       %sskip to random station%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --toggle%s     %spause/resume%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --status%s     %sshow what's playing%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --stop%s       %sstop playback%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --fg%s         %srun in foreground%s\n", cyan, reset, dim, reset)
 	fmt.Println()
 }
 
@@ -104,11 +158,10 @@ func findStation(name string) *Station {
 	return nil
 }
 
-func play(s *Station) {
-	rand.Seed(time.Now().UnixNano())
-	vibe := vibes[rand.Intn(len(vibes))]
+func playForeground(s *Station) {
+	vibe := vibes[randInt(len(vibes))]
 
-	fmt.Print("\033[2J\033[H") // clear screen
+	fmt.Print("\033[2J\033[H")
 	fmt.Print(logo)
 	fmt.Printf("  %s♪ %s%s\n", pink, s.Desc, reset)
 	fmt.Printf("  %s~ %s ~%s\n\n", dim, vibe, reset)
