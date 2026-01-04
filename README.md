@@ -97,7 +97,7 @@ Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`,
 
 ## Foreground Mode
 
-Use `--fg` for the original interactive experience with mpv controls:
+Use `--fg` to run in the terminal with mpv controls:
 
 | Key | Action |
 |-----|--------|
