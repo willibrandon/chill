@@ -10,24 +10,32 @@ Terminal lofi radio. Streams the best 24/7 lofi beats from YouTube.
 
 ## Install
 
+Requires [mpv](https://mpv.io/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+
+**macOS:**
 ```bash
-# requires mpv and yt-dlp
 brew install mpv yt-dlp
-
-# install chill
-go install github.com/willibrandon/chill@latest
-
-# or build from source
-git clone https://github.com/willibrandon/chill
-cd chill
-go install .
 ```
 
-Make sure `~/go/bin` is in your `PATH`:
-
+**Linux:**
 ```bash
-export PATH="$HOME/go/bin:$PATH"
+sudo apt install mpv
+pip install yt-dlp
 ```
+
+**Windows:**
+```powershell
+choco install mpv yt-dlp
+```
+
+Then install chill:
+```bash
+go install github.com/willibrandon/chill@latest
+```
+
+Make sure your Go bin directory is in your `PATH`:
+- macOS/Linux: `export PATH="$HOME/go/bin:$PATH"`
+- Windows: Add `%USERPROFILE%\go\bin` to your PATH
 
 ## Usage
 
@@ -45,13 +53,13 @@ chill --fg           # run in foreground (no daemon)
 
 ## Architecture
 
-chill uses a client-server architecture. The first `chill` command spawns a background daemon that manages playback. Subsequent commands communicate with the daemon over a Unix socket.
+chill uses a client-server architecture. The first `chill` command spawns a background daemon that manages playback. Subsequent commands communicate with the daemon over IPC (Unix socket on macOS/Linux, TCP on Windows).
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
 │ chill       │ ──── │ daemon      │ ──── │ mpv         │
-│ (client)    │ unix │ (server)    │      │ (playback)  │
-└─────────────┘ sock └─────────────┘      └─────────────┘
+│ (client)    │ IPC  │ (server)    │      │ (playback)  │
+└─────────────┘      └─────────────┘      └─────────────┘
 ```
 
 This means:
