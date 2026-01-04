@@ -54,10 +54,10 @@ type Station struct {
 var stations = []Station{
 	{"lofi-girl", "https://www.youtube.com/watch?v=jfKfPfyJRdk", "Lofi Girl - beats to relax/study to"},
 	{"chillhop", "https://www.youtube.com/watch?v=5yx6BWlEVcY", "Chillhop Radio - jazzy & lofi hip hop"},
-	{"lofi-girl-sleep", "https://www.youtube.com/watch?v=rUxyKA_-grg", "Lofi Girl - sleepy beats"},
-	{"jazz-hop", "https://www.youtube.com/watch?v=9UMxZofMNbA", "Jazz Hop Cafe - smooth jazz beats"},
-	{"the-bootleg-boy", "https://www.youtube.com/watch?v=p2ljmqDV8eY", "The Bootleg Boy - chill lofi"},
-	{"college-music", "https://www.youtube.com/watch?v=5NG_WQkVvDs", "College Music - lofi hip hop"},
+	{"chillout", "https://www.youtube.com/watch?v=9UMxZofMNbA", "Chillout Lounge - calm & relaxing"},
+	{"code-radio", "https://www.youtube.com/watch?v=ByZGu229-yA", "Code Radio - beats to study & code to"},
+	{"sleep", "https://www.youtube.com/watch?v=rPjez8z61rI", "Lofi - beats to sleep/relax to"},
+	{"study", "https://www.youtube.com/watch?v=7NOSDKb0HlU", "Lofi - beats to study/relax to"},
 }
 
 func main() {

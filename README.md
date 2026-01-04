@@ -34,7 +34,7 @@ export PATH="$HOME/go/bin:$PATH"
 ```bash
 chill                      # play default (lofi-girl)
 chill chillhop             # play a specific station
-chill --station=jazz-hop   # alternate syntax
+chill --station=chillout   # alternate syntax
 chill --list               # show all stations
 ```
 
@@ -44,10 +44,10 @@ chill --list               # show all stations
 |---------|-------------|
 | `lofi-girl` | Lofi Girl - beats to relax/study to |
 | `chillhop` | Chillhop Radio - jazzy & lofi hip hop |
-| `lofi-girl-sleep` | Lofi Girl - sleepy beats |
-| `jazz-hop` | Jazz Hop Cafe - smooth jazz beats |
-| `the-bootleg-boy` | The Bootleg Boy - chill lofi |
-| `college-music` | College Music - lofi hip hop |
+| `chillout` | Chillout Lounge - calm & relaxing |
+| `code-radio` | Code Radio - beats to study & code to |
+| `sleep` | Lofi - beats to sleep/relax to |
+| `study` | Lofi - beats to study/relax to |
 
 ## Controls
 
