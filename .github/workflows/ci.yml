@@ -41,9 +41,14 @@ jobs:
         run: |
           choco install mpv yt-dlp -y
 
-      - name: Test --list
+      - name: Test --list (Unix)
+        if: matrix.os != 'windows-latest'
         run: ./chill --list
-        shell: bash
+
+      - name: Test --list (Windows)
+        if: matrix.os == 'windows-latest'
+        run: .\chill.exe --list
+        shell: pwsh
 
       - name: Test playback (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
