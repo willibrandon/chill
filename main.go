@@ -67,7 +67,9 @@ type Station struct {
 
 // stations contains the available 24/7 lofi radio streams.
 var stations = []Station{
-	{"lofi-girl", "https://www.youtube.com/watch?v=jfKfPfyJRdk", "Lofi Girl - beats to relax/study to"},
+	// Use the channel's live endpoint because individual YouTube stream IDs
+	// are replaced whenever Lofi Girl restarts the broadcast.
+	{"lofi-girl", "https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live", "Lofi Girl - beats to relax/study to"},
 	{"chillhop", "https://www.youtube.com/watch?v=5yx6BWlEVcY", "Chillhop Radio - jazzy & lofi hip hop"},
 	{"chillout", "https://www.youtube.com/watch?v=9UMxZofMNbA", "Chillout Lounge - calm & relaxing"},
 	{"code-radio", "https://www.youtube.com/watch?v=ByZGu229-yA", "Code Radio - beats to study & code to"},

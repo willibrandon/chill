@@ -1,4 +1,4 @@
-module chill
+module github.com/willibrandon/chill
 
 go 1.25.5
 

@@ -2,5 +2,8 @@
 chill
 chill.exe
 
+# macOS metadata
+.DS_Store
+
 # Claude AI files
 .claude/
