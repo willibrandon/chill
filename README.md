@@ -6,11 +6,34 @@ Terminal lofi radio. Streams the best 24/7 lofi beats from YouTube.
 
 ## Install
 
-Requires [mpv](https://mpv.io/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+### Homebrew (macOS and Linux)
+
+```bash
+brew install willibrandon/tap/chill
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add willibrandon https://github.com/willibrandon/scoop-bucket
+scoop bucket add extras
+scoop install chill
+```
+
+Both packages install [mpv](https://mpv.io/),
+[yt-dlp](https://github.com/yt-dlp/yt-dlp), and Deno for YouTube extraction.
+Update them with `brew upgrade willibrandon/tap/chill` or `scoop update chill`.
+Package definitions currently target the published v0.5.0 release; the diagnostics
+and JSON commands below are available in source and the next release.
+
+### Go or release binary
+
+Install mpv and yt-dlp first. Current yt-dlp also needs a JavaScript runtime
+for full YouTube support; Deno is its default choice.
 
 **macOS:**
 ```bash
-brew install mpv yt-dlp
+brew install mpv yt-dlp deno
 ```
 
 **Linux:**
@@ -19,9 +42,11 @@ sudo apt install mpv pipx
 pipx install yt-dlp
 ```
 
+Also install [Deno](https://docs.deno.com/runtime/getting_started/installation/).
+
 **Windows:**
 ```powershell
-choco install mpv yt-dlp
+choco install mpv yt-dlp deno
 ```
 
 Then install chill:
@@ -40,6 +65,10 @@ chill update
 `chill -update`, `chill --update`, and `chill upgrade` work too. This downloads
 the latest release for your platform, verifies its checksum, and updates the
 running daemon while preserving playback settings.
+For a Homebrew or Scoop installation, `chill update` instead tells you which
+package-manager command to use; it does not replace a package-owned executable.
+This guard is available in source and the next release; use the package manager
+when running v0.5.0 as well.
 
 Make sure your Go bin directory is in your `PATH`:
 - macOS/Linux: `export PATH="$HOME/go/bin:$PATH"`
@@ -56,6 +85,9 @@ chill --toggle       # pause/resume
 chill --vol 60       # set volume (also +5, -10, up, down)
 chill --mute         # toggle mute
 chill --status       # show what's playing
+chill --status --json # read-only, machine-readable status
+chill doctor         # check dependencies, config, and daemon compatibility
+chill doctor --stations # resolve every configured stream without playing audio
 chill --stop         # stop playback
 chill --list         # show all stations
 chill add n url desc # save your own station
@@ -169,10 +201,85 @@ be removed. `chill default <name>` chooses what `chill`, REPL `play`, and
 `chill --fg` play without a station argument. The initial default is `lofi-girl`;
 removing a custom station that was the default returns to `lofi-girl`.
 
+Built-in streams were checked on September 20, 2026. Their channels host multiple
+broadcasts, so a channel's `/live` URL can silently select a different mix. The
+built-ins pin the intended broadcasts, including Lofi Girl's study stream. Use
+`chill doctor --stations` to recheck their resolved titles and live status when
+YouTube changes them. An unavailable stream can be overridden with `chill add`.
+
 Add, remove, and default commands update the running daemon automatically. For
 manual file edits, use `chill -i` then `reload`, or restart the daemon. Reload
 rebuilds the list from the built-ins and the current file, including removals.
 Reloading or removing a station does not interrupt a stream already playing.
+
+## Diagnostics
+
+```bash
+chill doctor
+chill doctor --stream lofi-girl
+chill doctor --stream 'https://www.youtube.com/watch?v=rFZHOHl-L8A'
+chill doctor --stations --timeout 30s
+chill doctor --logs
+```
+
+Doctor reports executable paths and versions for chill, mpv, yt-dlp, and Deno;
+checks the station config; and inspects daemon connectivity and compatibility.
+It warns about old yt-dlp versions and gives installation or recovery guidance.
+The basic check makes no stream requests. `--stream` checks one stream;
+`--stations` checks all effective stations, including custom overrides. Each
+check resolves an audio format without downloading or playing audio and reports
+the title and live status. These checks use the discovered extractor with its
+config disabled for reproducibility; mpv/yt-dlp cookies, proxy settings, and
+custom extractor overrides can make actual playback behave differently.
+
+Doctor never starts, upgrades, or stops the daemon. It distinguishes:
+
+- **Matching versions and protocols.** The client and daemon agree.
+- **Outdated daemon.** A normal playback/control command will automatically
+  upgrade it, preserving playback settings.
+- **Newer compatible daemon.** The client should be updated; the daemon is not
+  downgraded.
+- **Newer incompatible protocol.** Update the client before sending controls.
+- **Development/dirty builds.** Freshness cannot be verified from version labels;
+  `chill --stop` followed by `chill` restarts with the selected executable.
+- **Stale or unreachable IPC.** The discovery file exists, but status cannot be
+  read. This is reported separately from a normally stopped daemon.
+
+Warnings exit successfully; failed checks exit with code 1. Missing dependencies,
+invalid config, unreachable/incompatible daemons, and failed stream resolution
+are failures. A stopped daemon is normal. A resolved stream that is not live is
+a warning, since custom stations can intentionally be recordings.
+
+Each daemon launch saves its startup output to `daemon.log` beside
+`stations.json`, replacing the previous startup log. Startup failures include
+the recent output directly in the error. `--logs` shows the latest startup log,
+which may be from an earlier run. Playback errors remain available in status;
+mpv failures before its control socket opens now include stderr diagnostics.
+
+## Machine-readable status
+
+`chill --status --json` emits one uncolored JSON object. Like doctor, it is a
+read-only inspection and does not perform the automatic daemon upgrade that
+ordinary CLI/REPL commands perform. Playback fields are at the top level:
+
+```bash
+chill --status --json | jq '{running, state, station, volume, muted, compatibility}'
+```
+
+The output includes `running`, `state`, `playing`, `paused`, `volume`, `muted`,
+daemon `version` and `protocol`, `client_version`, `client_protocol`, and
+`compatibility`. Optional playback details include `station`, `url`, `desc`,
+`uptime`, `error`, `retries`, `sleep`, and `sleep_until` (an absolute timestamp).
+Compatibility values are `current`, `daemon-outdated`, `client-outdated`,
+`incompatible`, `unverifiable`, `not-running`, or `unreachable`.
+
+With no daemon, `running` is false, `state` is `stopped`, daemon version is empty,
+and daemon protocol is zero; the command exits successfully. If inspection fails,
+it still emits JSON with `state: "unknown"`, `compatibility: "unreachable"`, and
+an `error`, then exits with code 1. In that case `running: false` means a running
+daemon could not be confirmed. A successfully inspected daemon may have
+`state: "failed"` or incompatible versions without making the inspection itself
+fail. Config warnings never contaminate JSON output.
 
 ## Interactive Mode
 
@@ -222,6 +329,15 @@ With mpv installed, run the playback integration test:
 ```bash
 CHILL_TEST_MPV=1 go test -count=1 -run TestMPVIntegration -v ./...
 ```
+
+The manually triggered **YouTube smoke test** workflow can also audit all built-in
+stations before testing playback. Live checks depend on YouTube access and stay
+separate from deterministic CI.
+
+For releases, update `Formula/chill.rb` in `willibrandon/homebrew-tap` using the
+new release's `checksums.txt`. `bucket/chill.json` in `willibrandon/scoop-bucket`
+has GitHub version discovery and autoupdate URLs/checksums for x64 and ARM64;
+run the bucket's normal update tooling after publishing a release.
 
 ## License
 

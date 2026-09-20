@@ -116,24 +116,36 @@ func startDaemon() error {
 		return err
 	}
 	cmd := exec.Command(exe, "--daemon")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	log, err := openDaemonLog()
+	if err != nil {
+		return fmt.Errorf("opening daemon log: %w", err)
+	}
+	defer log.Close()
+	cmd.Stdout = log
+	cmd.Stderr = log
 	cmd.Stdin = nil
 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go cmd.Wait()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 
 	// wait for daemon to be ready
 	for i := 0; i < 20; i++ {
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case err := <-exited:
+			return daemonStartError(fmt.Sprintf("process exited (%v)", err))
+		case <-time.After(100 * time.Millisecond):
+		}
 		if isDaemonRunning() {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("daemon failed to start")
+	cmd.Process.Kill()
+	<-exited
+	return daemonStartError("timed out waiting for the control socket")
 }
 
 // clientPlay starts playing the specified station via the daemon.

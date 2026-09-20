@@ -8,7 +8,11 @@ on:
       url:
         description: YouTube stream URL
         required: true
-        default: https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live
+        default: https://www.youtube.com/watch?v=rFZHOHl-L8A
+      stations:
+        description: Also check resolution of every built-in station
+        type: boolean
+        default: true
 
 jobs:
   playback:
@@ -35,6 +39,9 @@ jobs:
           deno --version
       - name: Build
         run: go build -v .
+      - name: Audit built-in station resolution
+        if: inputs.stations
+        run: ./chill doctor --stations
       - name: Verify live YouTube playback
         env:
           STREAM_URL: ${{ inputs.url }}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // socketPath returns the path to the Unix socket used for IPC.
@@ -24,7 +25,7 @@ func listenSocket() (net.Listener, error) {
 
 // dialSocket connects to the daemon's Unix socket.
 func dialSocket() (net.Conn, error) {
-	return net.Dial("unix", socketPath())
+	return net.DialTimeout("unix", socketPath(), time.Second)
 }
 
 // cleanupSocket removes the Unix socket file.

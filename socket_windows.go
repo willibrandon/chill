@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // socketPath returns the path to a lock file used to store the port number.
@@ -37,7 +38,7 @@ func dialSocket() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return net.Dial("tcp", string(data))
+	return net.DialTimeout("tcp", string(data), time.Second)
 }
 
 // cleanupSocket removes the port file.

@@ -71,9 +71,9 @@ type Station struct {
 
 // builtinStations is the immutable starting point for every config reload.
 var builtinStations = []Station{
-	// Use the channel's live endpoint because individual YouTube stream IDs
-	// are replaced whenever Lofi Girl restarts the broadcast.
-	{"lofi-girl", "https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live", "Lofi Girl - beats to relax/study to"},
+	// These channels run multiple broadcasts: /live can select the wrong mix.
+	// Keep the intended stream IDs and audit with chill doctor --stations.
+	{"lofi-girl", "https://www.youtube.com/watch?v=rFZHOHl-L8A", "Lofi Girl - beats to relax/study to"},
 	{"chillhop", "https://www.youtube.com/watch?v=5yx6BWlEVcY", "Chillhop Radio - jazzy & lofi hip hop"},
 	{"chillout", "https://www.youtube.com/watch?v=9UMxZofMNbA", "Chillout Lounge - calm & relaxing"},
 	{"code-radio", "https://www.youtube.com/watch?v=ByZGu229-yA", "Code Radio - beats to study & code to"},
@@ -98,6 +98,7 @@ func main() {
 	repl := flag.Bool("i", false, "interactive mode (repl)")
 	list := flag.Bool("list", false, "list stations")
 	status := flag.Bool("status", false, "show current status")
+	jsonOutput := flag.Bool("json", false, "machine-readable status (with --status; read-only)")
 	toggle := flag.Bool("toggle", false, "toggle play/pause")
 	skip := flag.Bool("skip", false, "skip to random station")
 	stop := flag.Bool("stop", false, "stop playback")
@@ -114,6 +115,25 @@ func main() {
 
 	flag.Parse()
 	enableANSI()
+	if *jsonOutput {
+		if !*status || flag.NArg() != 0 || flag.NFlag() != 2 {
+			fmt.Fprintln(os.Stderr, "usage: chill --status --json")
+			os.Exit(1)
+		}
+		out, err := statusJSON()
+		fmt.Println(out)
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if flag.NArg() > 0 && flag.Arg(0) == "doctor" {
+		if err := runDoctor(flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cleanupUpdateBackups()
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", configErr)
@@ -208,21 +228,28 @@ func printStations() {
 	fmt.Println()
 	fmt.Println(dim + "  usage:" + reset)
 	fmt.Println()
-	fmt.Printf("    %schill%s              %splay default station%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill chillhop%s     %splay specific station%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill -i%s           %sinteractive mode (repl)%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --skip%s       %sskip to random station%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --toggle%s     %spause/resume%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --vol 60%s     %sset volume (or +5, -10, up, down)%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --mute%s       %stoggle mute%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --status%s     %sshow what's playing%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --stop%s       %sstop playback%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill add n url%s    %ssave a station%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill remove n%s     %sremove a custom station or override%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill default n%s    %sset the default station%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --sleep 45m%s  %sstop after 45 minutes (off to cancel)%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill --fg%s         %srun in foreground%s\n", cyan, reset, dim, reset)
-	fmt.Printf("    %schill update%s       %sinstall the latest release%s\n", cyan, reset, dim, reset)
+	usage := [][2]string{
+		{"chill", "play default station"},
+		{"chill chillhop", "play specific station"},
+		{"chill -i", "interactive mode (repl)"},
+		{"chill --skip", "skip to random station"},
+		{"chill --toggle", "pause/resume"},
+		{"chill --vol 60", "set volume (or +5, -10, up, down)"},
+		{"chill --mute", "toggle mute"},
+		{"chill --status", "show what's playing"},
+		{"chill --status --json", "machine-readable status"},
+		{"chill doctor", "diagnose setup (--stations checks streams)"},
+		{"chill --stop", "stop playback"},
+		{"chill add n url", "save a station"},
+		{"chill remove n", "remove a custom station or override"},
+		{"chill default n", "set the default station"},
+		{"chill --sleep 45m", "stop after 45 minutes (off to cancel)"},
+		{"chill --fg", "run in foreground"},
+		{"chill update", "install the latest release"},
+	}
+	for _, row := range usage {
+		fmt.Printf("    %s%-20s%s  %s%s%s\n", cyan, row[0], reset, dim, row[1], reset)
+	}
 	fmt.Println()
 }
 

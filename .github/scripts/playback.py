@@ -3,9 +3,11 @@
 import argparse
 import csv
 import io
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -81,6 +83,28 @@ def main():
             raise RuntimeError(f"Timed out waiting for {state}: {previous}")
 
         try:
+            stopped = json.loads(run("--status", "--json"))
+            require(not stopped["running"] and stopped["state"] == "stopped",
+                    f"Unexpected status before startup: {stopped}")
+            doctor = run("doctor")
+            require("no daemon running" in doctor, "Doctor did not report the stopped daemon")
+            # A nonempty directory blocks both Unix sockets and the Windows
+            # discovery file, forcing a real child-daemon startup failure.
+            blocked = root / ("chill.port" if os.name == "nt" else f"chill-{os.getuid()}.sock")
+            blocked.mkdir()
+            (blocked / "blocker").write_text("test", encoding="utf-8")
+            try:
+                failed = subprocess.run([str(binary)], env=env, capture_output=True,
+                                        text=True, timeout=15)
+                require(failed.returncode != 0 and "daemon failed to start" in failed.stderr
+                        and "failed to start daemon" in failed.stderr and "daemon.log" in failed.stderr,
+                        f"Missing daemon startup diagnostics: {failed.stderr}")
+                stale = subprocess.run([str(binary), "--status", "--json"], env=env,
+                                       capture_output=True, text=True, timeout=15)
+                require(stale.returncode != 0 and json.loads(stale.stdout)["state"] == "unknown",
+                        f"Stale IPC was not reported as JSON: {stale.stdout}")
+            finally:
+                shutil.rmtree(blocked)
             run("add", "ci-audio", args.youtube or str(audio), "CI playback")
             run("default", "ci-audio")
             if args.legacy_bin_dir:
@@ -91,6 +115,12 @@ def main():
                 run("--vol", "55", executable=legacy)
                 run("--toggle", executable=legacy)
                 old_players = player_pids() - baseline
+                inspected = json.loads(run("--status", "--json"))
+                require(inspected["compatibility"] == "daemon-outdated",
+                        f"Legacy daemon was not identified: {inspected}")
+                require("stale daemon" in run("doctor"), "Doctor did not identify the stale daemon")
+                require(player_pids() - baseline == old_players,
+                        "Read-only inspection restarted the legacy player")
                 run("--vol", "90")
                 status = wait_for("paused")
                 require("ci-audio" in status and "vol 90" in status,
@@ -115,6 +145,10 @@ def main():
             run("--mute")
             status = wait_for("paused")
             require("vol 31" in status and "muted" in status, f"Live controls failed: {status}")
+            structured = json.loads(run("--status", "--json"))
+            require(structured["running"] and structured["paused"] and structured["muted"]
+                    and structured["volume"] == 31 and structured["station"] == "ci-audio",
+                    f"Structured status lost playback fields: {structured}")
             run("--mute")
             status = run("--status")
             require(status.startswith("paused │") and "muted" not in status,

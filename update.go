@@ -99,6 +99,9 @@ func (u releaseUpdater) install(target, current string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	if command := packageUpdateCommand(target); command != "" {
+		return "", false, fmt.Errorf("this installation is package-managed; run `%s`", command)
+	}
 	unlock, err := lockFile(target + ".update.lock")
 	if err != nil {
 		return "", false, fmt.Errorf("cannot update %s: %w", target, err)

@@ -56,6 +56,8 @@ func startPlayer(volume int, muted, paused bool) (player, error) {
 		"--input-terminal=no", "--input-ipc-server="+endpoint,
 		fmt.Sprintf("--volume=%d", volume), fmt.Sprintf("--mute=%s", yesNo(muted)),
 		fmt.Sprintf("--pause=%s", yesNo(paused)))
+	var diagnostics tailBuffer
+	cmd.Stderr = &diagnostics
 	tree, err := startInTree(cmd)
 	if err != nil {
 		os.RemoveAll(dir)
@@ -76,12 +78,12 @@ func startPlayer(volume int, muted, paused bool) (player, error) {
 		select {
 		case <-p.exited:
 			p.close()
-			return nil, fmt.Errorf("mpv exited before opening its control socket")
+			return nil, fmt.Errorf("mpv exited before opening its control socket: %s", diagnostics.String())
 		default:
 		}
 		if time.Now().After(deadline) {
 			p.close()
-			return nil, fmt.Errorf("connecting to mpv: %w", err)
+			return nil, fmt.Errorf("connecting to mpv: %w; %s", err, diagnostics.String())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -85,7 +85,16 @@ func checkRequirements() error {
 // with. mpv doesn't only look in PATH, a copy in its config directory or
 // beside mpv itself works too.
 func hasYtdl(mpv string) bool {
+	return findYtdl(mpv) != ""
+}
+
+// findYtdl uses the same search locations as the requirements check so doctor
+// can report and run the discovered extractor, including portable installs.
+func findYtdl(mpv string) string {
 	var dirs []string
+	if dir := os.Getenv("MPV_HOME"); dir != "" {
+		dirs = append(dirs, dir)
+	}
 	if mpv != "" {
 		dir := filepath.Dir(mpv)
 		dirs = append(dirs, dir, filepath.Join(dir, "portable_config"))
@@ -99,14 +108,14 @@ func hasYtdl(mpv string) bool {
 
 	// the names mpv tries, in its order
 	for _, name := range []string{"yt-dlp", "yt-dlp_x86", "youtube-dl"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return true
+		if path, err := exec.LookPath(name); err == nil {
+			return path
 		}
 		for _, dir := range dirs {
-			if _, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
-				return true
+			if path, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
+				return path
 			}
 		}
 	}
-	return false
+	return ""
 }
