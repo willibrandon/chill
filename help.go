@@ -16,7 +16,7 @@ Usage:
   chill [options] [station]
   chill <command> [arguments]
 
-With no arguments, chill plays your default station in the background.
+With no arguments, chill opens the interactive REPL.
 `)
 	printHelpSection(out, "Commands", [][2]string{
 		{"play [station]", "resume playback or play a station"},
@@ -47,8 +47,9 @@ With no arguments, chill plays your default station in the background.
         show this help
 `)
 	printHelpSection(out, "Examples", [][2]string{
+		{"chill", "open the interactive REPL"},
 		{"chill chillhop", "play a station"},
-		{"chill -i", "open the interactive REPL"},
+		{"chill -i", "same as chill"},
 		{"chill podcasts", "open the podcast browser"},
 		{"chill podcasts search history --json", "search for shows as JSON"},
 		{"chill --vol +5", "raise the volume"},

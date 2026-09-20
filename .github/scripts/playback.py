@@ -111,7 +111,7 @@ def main():
             blocked.mkdir()
             (blocked / "blocker").write_text("test", encoding="utf-8")
             try:
-                failed = subprocess.run([str(binary)], env=env, capture_output=True,
+                failed = subprocess.run([str(binary), "--toggle"], env=env, capture_output=True,
                                         text=True, timeout=15)
                 require(failed.returncode != 0 and "daemon failed to start" in failed.stderr
                         and "failed to start daemon" in failed.stderr and "daemon.log" in failed.stderr,
@@ -152,7 +152,7 @@ def main():
                 run("--stop")
                 wait_for("not running")
                 print("v0.3.2 daemon upgraded automatically; subsequent volume changes kept the same player", flush=True)
-            print(run(), flush=True)
+            print(run("--toggle"), flush=True)
             wait_for("playing", timeout=190 if args.youtube else 10)
             # Catch failures that occur just after mpv's file-loaded event.
             time.sleep(0.5)
@@ -182,7 +182,7 @@ def main():
             if not args.youtube:
                 run("--stop")
                 wait_for("not running")
-                print(run(), flush=True)
+                print(run("--toggle"), flush=True)
                 status = wait_for("playing")
                 require("ci-audio" in status and "vol 31" in status,
                         f"Default station or volume was not remembered: {status}")

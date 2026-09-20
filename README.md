@@ -65,15 +65,15 @@ Use `chill update` for Go installs and release binaries,
 ## Usage
 
 ```bash
-chill                   # play default station (starts daemon automatically)
+chill                   # open the interactive REPL
 chill chillhop          # play specific station
-chill -i                # interactive mode (repl)
+chill -i                # same as chill
 chill podcasts          # browse podcasts
 chill podcasts --help   # podcast CLI commands
 chill seek -30          # jump back 30 seconds in an episode
 chill speed 1.5         # podcast playback speed
 chill --skip            # skip to random station
-chill --toggle          # pause/resume
+chill --toggle          # pause/resume, or play the default station when stopped
 chill --vol 60          # set volume (also +5, -10, up, down)
 chill --mute            # toggle mute
 chill --status          # show what's playing
@@ -141,7 +141,8 @@ Use `chill --sleep off` to cancel it.
 | `sleep` | Lofi - beats to sleep/relax to |
 | `study` | Lofi - beats to study/relax to |
 
-The default is `lofi-girl`. Change it with `chill default <name>`.
+Type `play` in the REPL to start the default station, `lofi-girl`.
+Change it with `chill default <name>`.
 
 ### Your own stations
 
@@ -170,7 +171,7 @@ run `reload` in the REPL.
 
 ## Interactive Mode
 
-`chill -i` opens the REPL. Type `help` for commands or press F1 for keys.
+`chill` (or `chill -i`) opens the REPL. Type `help` for commands or press F1 for keys.
 A station name starts playback. `doctor` takes the same options as the CLI.
 Diagnostic findings appear as each check finishes. Press `Ctrl+C` (when nothing
 is selected) or type `cancel` to cancel diagnostics and discard queued commands.

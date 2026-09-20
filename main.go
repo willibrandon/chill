@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	chill              # play default station
+//	chill              # open the interactive REPL
 //	chill chillhop     # play specific station
 //	chill -i           # interactive mode (repl)
 //	chill --vol 60     # set volume (or +5, -10, up, down)
@@ -102,7 +102,7 @@ func main() {
 	list := flag.Bool("list", false, "list stations")
 	status := flag.Bool("status", false, "show current status")
 	jsonOutput := flag.Bool("json", false, "machine-readable status (with --status; read-only)")
-	toggle := flag.Bool("toggle", false, "toggle play/pause")
+	toggle := flag.Bool("toggle", false, "pause/resume, or play the default station when stopped")
 	skip := flag.Bool("skip", false, "skip to random station")
 	stop := flag.Bool("stop", false, "stop playback")
 	sleep := flag.String("sleep", "", "stop playback after a duration (45m, 1h, or off)")
@@ -218,7 +218,7 @@ func main() {
 	switch {
 	case *daemon:
 		runDaemon()
-	case *repl:
+	case *repl || flag.NArg() == 0 && flag.NFlag() == 0:
 		runRepl()
 	case *version:
 		fmt.Println("chill " + buildVersion())
@@ -269,7 +269,7 @@ func main() {
 		}
 		playForeground(st)
 	default:
-		// default: play via daemon
+		// Play the requested station via the daemon.
 		s := *station
 		if s == "" && flag.NArg() > 0 {
 			s = flag.Arg(0)
@@ -321,7 +321,7 @@ func printStations() {
 	fmt.Println(dim + "  usage:" + reset)
 	fmt.Println()
 	usage := [][2]string{
-		{"chill", "play default station"},
+		{"chill", "open the interactive REPL"},
 		{"chill chillhop", "play specific station"},
 		{"chill -i", "interactive mode (repl)"},
 		{"chill --skip", "skip to random station"},
