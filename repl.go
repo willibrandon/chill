@@ -28,7 +28,7 @@ var replCommands = []replCommand{
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
 	{"list", "", "list all stations"},
-	{"add", "<name> <url> [desc]", "save a station to the config"},
+	{"add", "<name> <url>", "save a station to the config"},
 	{"reload", "", "reload stations from the config"},
 	{"stop", "", "stop playback"},
 	{"clear", "", "clear the screen"},
