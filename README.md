@@ -106,6 +106,12 @@ terminal. You can control it from another terminal.
 After an update, the next control command restarts an older daemon and restores
 your playback settings. Volume is saved between sessions.
 
+If a stream disconnects, chill keeps reconnecting with increasing delays, capped
+at 30 seconds. `--status` and the REPL show the retry count and countdown; JSON
+status includes `state: "reconnecting"` and `retry_at` while waiting. Volume,
+mute, pause, and the sleep deadline survive reconnects. Stop playback or switch
+stations to cancel a reconnect.
+
 ### Sleep timer
 
 `chill --sleep 45m` stops playback after 45 minutes. Durations such as `1h30m`
@@ -154,6 +160,9 @@ run `reload` in the REPL.
 
 `chill -i` opens the REPL. Type `help` for commands or press F1 for keys.
 A station name starts playback. `doctor` takes the same options as the CLI.
+Diagnostic findings appear as each check finishes. Press `Ctrl+C` (when nothing
+is selected) or type `cancel` to cancel diagnostics and discard queued commands.
+Quitting also cancels diagnostics; music keeps playing.
 
 `sleep` plays the station. `sleep 45m` sets the timer.
 
@@ -168,7 +177,7 @@ A station name starts playback. `doctor` takes the same options as the CLI.
 | `Shift+↑` / `Shift+↓` | select lines of the transcript |
 | `y` / `Enter` / `Ctrl+C` | copy what is selected |
 | mouse | drag to select, right click to copy, or to paste when nothing is selected |
-| `Ctrl+C` | clear the line, when nothing is selected |
+| `Ctrl+C` | cancel diagnostics, otherwise clear the line (when nothing is selected) |
 | `Ctrl+L` | clear the screen |
 | `F1` | help |
 | `Ctrl+Q` | quit, music keeps playing |

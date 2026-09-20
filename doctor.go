@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -48,6 +49,13 @@ func (r *doctorReport) check(level, name, message string) {
 }
 
 func runDoctor(args []string, out io.Writer) error {
+	return runDoctorContext(context.Background(), args, out)
+}
+
+func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	options, err := parseDoctorOptions(args, out)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -65,21 +73,27 @@ func runDoctor(args []string, out io.Writer) error {
 
 	mpv, _ := exec.LookPath("mpv")
 	extractor := findYtdl(mpv)
-	r.program("mpv", mpv)
-	r.program("yt-dlp", extractor)
+	r.program(ctx, "mpv", mpv)
+	r.program(ctx, "yt-dlp", extractor)
 	if deno, _ := exec.LookPath("deno"); deno != "" {
-		r.program("deno", deno)
+		r.program(ctx, "deno", deno)
 	} else {
 		r.check("WARN", "YouTube runtime", "Deno not found; current yt-dlp needs a JavaScript runtime for full YouTube support. Install deno or configure another supported runtime in yt-dlp")
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := checkDoctorConfig(); err != nil {
 		r.check("FAIL", "config", err.Error()+"; fix stations.json, then rerun doctor")
 	} else {
 		r.check("OK", "config", fmt.Sprintf("%s (%d stations, default %s; missing file uses built-ins)", configPath(), len(stationSnapshot()), defaultStation()))
 	}
 
-	s, daemonErr := inspectDaemon()
+	s, daemonErr := inspectDaemonContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if daemonErr != nil {
 		r.check("FAIL", "daemon", daemonErr.Error()+"; try chill --stop then chill; if no daemon is alive, a playback command replaces stale discovery data")
 	} else {
@@ -136,8 +150,14 @@ func runDoctor(args []string, out io.Writer) error {
 		r.check("FAIL", "streams", "cannot resolve streams until yt-dlp is installed")
 	} else {
 		for _, station := range checks {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			fmt.Fprintf(out, "Checking %s (%s)...\n", station.Name, station.URL)
-			info, err := probeStream(extractor, station.URL, options.timeout)
+			info, err := probeStreamContext(ctx, extractor, station.URL, options.timeout)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err != nil {
 				r.check("FAIL", station.Name, err.Error()+"; update yt-dlp, check your network, or replace the station URL with chill add")
 				continue
@@ -155,12 +175,18 @@ func runDoctor(args []string, out io.Writer) error {
 	return nil
 }
 
-func (r *doctorReport) program(name, path string) {
+func (r *doctorReport) program(ctx context.Context, name, path string) {
+	if ctx.Err() != nil {
+		return
+	}
 	if path == "" {
 		r.check("FAIL", name, "not found; install with `"+strings.Join(installCommands([]string{name}), "` then `")+"`")
 		return
 	}
-	stdout, stderr, err := diagnosticCommand(path, 5*time.Second, "--version")
+	stdout, stderr, err := diagnosticCommandContext(ctx, path, 5*time.Second, "--version")
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		r.check("FAIL", name, fmt.Sprintf("%s: %v; %s", path, err, stderr))
 		return
@@ -192,6 +218,13 @@ func checkDoctorConfig() error {
 }
 
 func diagnosticCommand(path string, timeout time.Duration, args ...string) (string, string, error) {
+	return diagnosticCommandContext(context.Background(), path, timeout, args...)
+}
+
+func diagnosticCommandContext(ctx context.Context, path string, timeout time.Duration, args ...string) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	cmd := exec.Command(path, args...)
 	var stdout, stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -211,6 +244,10 @@ func diagnosticCommand(path string, timeout time.Duration, args ...string) (stri
 		tree.kill() // includes an extractor's JavaScript runtime or launcher
 		<-exited
 		err = fmt.Errorf("timed out after %s", timeout)
+	case <-ctx.Done():
+		tree.kill()
+		<-exited
+		err = ctx.Err()
 	}
 	return stdout.String(), stderr.String(), err
 }
@@ -220,8 +257,8 @@ type streamInfo struct {
 	LiveStatus string `json:"live_status"`
 }
 
-func probeStream(extractor, url string, timeout time.Duration) (streamInfo, error) {
-	stdout, stderr, err := diagnosticCommand(extractor, timeout,
+func probeStreamContext(ctx context.Context, extractor, url string, timeout time.Duration) (streamInfo, error) {
+	stdout, stderr, err := diagnosticCommandContext(ctx, extractor, timeout,
 		"--ignore-config", "--no-playlist", "--simulate", "--no-progress",
 		"--socket-timeout", "10", "--retries", "0", "--format", "bestaudio/best",
 		"--print", `{"title":%(title)j,"live_status":%(live_status)j}`, "--", url)

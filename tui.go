@@ -5,8 +5,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -53,6 +55,7 @@ type statusMsg struct {
 
 // resultMsg carries the outcome of a finished command.
 type resultMsg struct {
+	id  uint64
 	out string
 	err error
 }
@@ -90,6 +93,9 @@ type tui struct {
 	activeLine     int // submitted command's transcript line, or -1
 	activeRow      int // row where its spinner is drawn, or -1
 	activeExtraRow bool
+	commandID      uint64
+	task           *replTask
+	cancelling     bool
 
 	help     bool           // the help screen is showing
 	helpView viewport.Model // scrolls the help screen
@@ -146,10 +152,10 @@ func refreshStatus() tea.Msg {
 }
 
 // run executes a submitted line off the UI goroutine.
-func run(line string) tea.Cmd {
+func run(line string, id uint64) tea.Cmd {
 	return func() tea.Msg {
 		out, err := execute(line)
-		return resultMsg{out, err}
+		return resultMsg{id: id, out: out, err: err}
 	}
 }
 
@@ -204,7 +210,22 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		}
 		return tea.Tick(time.Second, func(time.Time) tea.Msg { return pollStatus() })
 
+	case outputMsg:
+		if msg.id != t.commandID || t.task == nil {
+			return nil
+		}
+		t.print(styleDim.Render("  ┊ ") + msg.line)
+		return t.task.next
+
 	case resultMsg:
+		if msg.id != t.commandID || !t.running {
+			return nil
+		}
+		if t.task != nil {
+			t.task.cancel()
+			t.task = nil
+		}
+		t.cancelling = false
 		t.running = false
 		t.active = ""
 		t.activeLine, t.activeRow = -1, -1
@@ -224,6 +245,8 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			for _, line := range strings.Split(missing.chill(), "\n") {
 				t.print(line)
 			}
+		} else if errors.Is(msg.err, context.Canceled) {
+			t.print(styleDim.Render("  cancelled"))
 		} else if msg.err != nil {
 			t.print(styleError.Render("  error: ") + msg.err.Error())
 		}
@@ -276,7 +299,9 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 
 	case "ctrl+c":
-		// clears the line, never quits
+		if t.cancelCommand() {
+			return nil
+		}
 		t.setInput("")
 		return nil
 
@@ -382,6 +407,8 @@ func (t *tui) helpKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+q":
 		return tea.Quit
+	case "ctrl+c":
+		t.cancelCommand()
 	case "f1", "esc":
 		t.help = false
 	case "pgup":
@@ -413,6 +440,11 @@ func (t *tui) submit() tea.Cmd {
 	case "clear":
 		t.clear()
 		return nil
+	case "cancel":
+		if !t.cancelCommand() {
+			t.print(styleDim.Render("  no diagnostics running"))
+		}
+		return nil
 	}
 
 	if t.running {
@@ -424,13 +456,39 @@ func (t *tui) submit() tea.Cmd {
 
 // start echoes a line into the transcript and runs it.
 func (t *tui) start(line string) tea.Cmd {
+	t.commandID++
 	t.running = true
 	t.active = strings.ToLower(strings.Fields(line)[0])
 	// A fresh ID keeps late ticks from a previous command out of this animation.
 	t.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	t.activeLine = len(t.lines)
 	t.print(t.promptLabel() + highlight(line))
-	return tea.Batch(t.spinner.Tick, run(line))
+	command := run(line, t.commandID)
+	if t.active == "doctor" {
+		args := strings.Fields(line)[1:]
+		t.task = newREPLTask(t.commandID, func(ctx context.Context, out io.Writer) error {
+			return runDoctorContext(ctx, args, out)
+		})
+		command = t.task.next
+	}
+	return tea.Batch(t.spinner.Tick, command)
+}
+
+// Cancellation waits for subprocess cleanup before dispatching another command.
+func (t *tui) cancelCommand() bool {
+	if t.task == nil {
+		return false
+	}
+	t.pending = nil
+	t.cancelling = true
+	t.task.cancel()
+	return true
+}
+
+func (t *tui) shutdown() {
+	if t.task != nil {
+		t.task.stop()
+	}
 }
 
 // highlight colors a submitted line for the transcript.
@@ -745,7 +803,11 @@ func column(s string, width int) string {
 func (t *tui) statusBar() string {
 	facts := statusFacts(t.status)
 	if t.running {
-		facts = append([]string{t.spinner.View() + " Running " + t.active + "..."}, facts...)
+		action := "Running "
+		if t.cancelling {
+			action = "Cancelling "
+		}
+		facts = append([]string{t.spinner.View() + " " + action + t.active + "..."}, facts...)
 	}
 
 	hints := []string{"F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
@@ -754,6 +816,8 @@ func (t *tui) statusBar() string {
 		hints = []string{"Shift+↑↓ extend", "y yank", "Esc cancel"}
 	case t.sel.active:
 		hints = []string{"y yank", "Esc cancel"}
+	case t.task != nil:
+		hints = []string{"F1 help", "Ctrl+C cancel", "Ctrl+Q quit"}
 	case t.running:
 		hints = []string{"F1 help", "Ctrl+Q quit"}
 	case t.paletteOpen() && t.navigated:
@@ -794,7 +858,7 @@ func helpBody() string {
 		{"Shift+↑ / ↓", "select lines of the transcript"},
 		{"y / Enter / Ctrl+C", "copy what is selected"},
 		{"mouse", "drag to select, right click to copy, or to paste"},
-		{"Ctrl+C", "clear the line"},
+		{"Ctrl+C", "cancel diagnostics and queued commands, otherwise clear the line"},
 		{"Ctrl+L", "clear the screen"},
 		{"Ctrl+Q", "quit, music keeps playing"},
 	}
@@ -826,7 +890,10 @@ func helpBody() string {
 
 // runRepl starts the fullscreen REPL.
 func runRepl() {
-	if _, err := tea.NewProgram(newTUI()).Run(); err != nil {
+	model := newTUI()
+	_, err := tea.NewProgram(model).Run()
+	model.shutdown()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

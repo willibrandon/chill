@@ -70,7 +70,7 @@ func snapshotPlayback(s Status, now time.Time) (playbackSnapshot, error) {
 		}
 		snapshot.SleepUntil = now.Add(remaining)
 	}
-	if s.Station != "" && (s.Playing || s.Paused || s.State == "loading") {
+	if s.Station != "" && (s.Playing || s.Paused || s.State == "loading" || s.State == "reconnecting") {
 		if s.URL != "" {
 			snapshot.Station = &Station{Name: s.Station, URL: s.URL, Desc: s.Desc}
 		} else {

@@ -103,24 +103,75 @@ func TestLiveControlsPreservePlayerAndPause(t *testing.T) {
 	}
 }
 
-func TestReconnectBudgetAndFailureStatus(t *testing.T) {
-	d := fakeDaemon(t)
-	starts := 0
-	d.newPlayer = func(int, bool, bool) (player, error) {
-		starts++ // called only under the daemon lock
-		p := &fakePlayer{event: make(chan playerEvent, 8)}
-		p.event <- playerEvent{err: "stream unavailable"}
-		return p, nil
+// advanceReconnect fires a scheduled retry without waiting for real backoff.
+func advanceReconnect(t *testing.T, d *Daemon) {
+	t.Helper()
+	d.mu.Lock()
+	if d.retryTimer == nil || !d.retryTimer.Stop() {
+		d.mu.Unlock()
+		t.Fatal("no pending reconnect")
 	}
+	generation := d.generation
+	d.mu.Unlock()
+	d.retryPlayback(generation)
+}
+
+func TestProlongedOutageRecoversWithPlaybackSettings(t *testing.T) {
+	withConfigDir(t)
+	d := fakeDaemon(t)
 	wantReply(t, d.execute("play", "lofi-girl"), true, "loading")
-	s := waitState(t, d, "failed", 10*time.Second)
-	if s.Playing || s.Paused || s.Error != "stream unavailable" || s.Retries != maxRetries {
-		t.Fatalf("failure status: %+v", s)
+	wantReply(t, d.execute("pause", ""), true, "paused")
+	wantReply(t, d.execute("mute", ""), true, "muted")
+	wantReply(t, d.execute("sleep", "1h"), true, "")
+	sleepUntil := daemonStatus(t, d).SleepUntil
+	d.mu.Lock()
+	d.playbackFailed("network offline")
+	d.newPlayer = func(volume int, muted, paused bool) (player, error) {
+		if volume != 32 || !muted || !paused {
+			t.Errorf("reconnect lost settings: %d %v %v", volume, muted, paused)
+		}
+		return nil, fmt.Errorf("network offline")
+	}
+	d.mu.Unlock()
+	// Controls work even while there is no player.
+	wantReply(t, d.execute("vol", "32"), true, "32")
+	for i := 0; i < 12; i++ {
+		s := daemonStatus(t, d)
+		if s.State != "reconnecting" || s.Playing || !s.Paused || !s.Muted || s.Error != "network offline" || s.Retries != i+1 || !s.SleepUntil.Equal(sleepUntil) {
+			t.Fatalf("outage status: %+v", s)
+		}
+		delay := time.Until(s.RetryAt)
+		if delay <= 0 || delay > maxRetryDelay || i > 5 && delay < 29*time.Second {
+			t.Fatalf("unbounded or missing backoff: %s", delay)
+		}
+		advanceReconnect(t, d)
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if starts != 1+maxRetries || d.player != nil {
-		t.Fatalf("starts=%d player=%v", starts, d.player)
+	d.newPlayer = func(volume int, muted, paused bool) (player, error) {
+		if volume != 32 || !muted || !paused {
+			t.Errorf("recovery lost settings: %d %v %v", volume, muted, paused)
+		}
+		return &fakePlayer{event: make(chan playerEvent, 8)}, nil
+	}
+	d.mu.Unlock()
+	advanceReconnect(t, d)
+	d.mu.Lock()
+	p := d.player.(*fakePlayer)
+	d.mu.Unlock()
+	p.event <- playerEvent{loaded: true}
+	s := waitState(t, d, "paused", time.Second)
+	if s.Error != "" || !s.RetryAt.IsZero() || s.Volume != 32 || !s.Muted || !s.SleepUntil.Equal(sleepUntil) {
+		t.Fatalf("recovery status: %+v", s)
+	}
+	wantReply(t, d.execute("resume", ""), true, "resumed")
+	waitState(t, d, "playing", time.Second)
+	// A stable minute (including time spent asleep) restores the fast retry.
+	d.mu.Lock()
+	d.startedAt = time.Now().Add(-time.Minute)
+	d.playbackFailed("disconnected after wake")
+	d.mu.Unlock()
+	if s := daemonStatus(t, d); s.Retries != 1 || time.Until(s.RetryAt) > time.Second {
+		t.Fatalf("backoff did not reset after stable playback: %+v", s)
 	}
 }
 
@@ -133,12 +184,42 @@ func TestStopCancelsReconnectAndStaleEvents(t *testing.T) {
 	if d.retryTimer == nil {
 		t.Fatal("retry was not scheduled")
 	}
+	generation := d.generation
 	d.mu.Unlock()
 	wantReply(t, d.execute("stop", ""), true, "stopped")
+	d.retryPlayback(generation) // a timer callback already queued before stop
 	p.event <- playerEvent{loaded: true}
 	time.Sleep(1100 * time.Millisecond)
 	if s := daemonStatus(t, d); s.State != "idle" || s.Station != "" || s.Error != "" {
 		t.Fatalf("stale retry/event revived playback: %+v", s)
+	}
+}
+
+func TestSwitchStationAndSleepExpiryCancelReconnect(t *testing.T) {
+	for _, action := range []string{"switch", "sleep"} {
+		t.Run(action, func(t *testing.T) {
+			d := fakeDaemon(t)
+			wantReply(t, d.execute("play", "lofi-girl"), true, "loading")
+			d.mu.Lock()
+			old := d.player.(*fakePlayer)
+			d.playbackFailed("offline")
+			generation := d.generation
+			d.mu.Unlock()
+			want := "loading"
+			if action == "switch" {
+				wantReply(t, d.execute("play", "chillhop"), true, "loading")
+			} else {
+				wantReply(t, d.execute("sleep", "1ms"), true, "")
+				want = "idle"
+				waitState(t, d, want, time.Second)
+			}
+			d.retryPlayback(generation)
+			old.event <- playerEvent{loaded: true}
+			s := daemonStatus(t, d)
+			if s.State != want || s.Retries != 0 || !s.RetryAt.IsZero() || action == "switch" && s.Station != "chillhop" {
+				t.Fatalf("stale reconnect changed playback: %+v", s)
+			}
+		})
 	}
 }
 
@@ -169,8 +250,8 @@ func TestSleepTimerReplaceCancelAndExpire(t *testing.T) {
 }
 
 func TestStatusDisplaysLoadingFailureMuteAndSleep(t *testing.T) {
-	out := strings.Join(statusFacts(&Status{State: "loading", Station: "lofi-girl", Error: "unavailable", Retries: 2, Muted: true, Sleep: "45m0s"}), " ")
-	for _, want := range []string{"loading", "retry 2/3", "unavailable", "muted", "sleep 45m0s"} {
+	out := strings.Join(statusFacts(&Status{State: "reconnecting", Station: "lofi-girl", Error: "unavailable", Retries: 2, RetryAt: time.Now().Add(2 * time.Second), Paused: true, Muted: true, Sleep: "45m0s"}), " ")
+	for _, want := range []string{"reconnecting", "retry 2 in 2s", "paused", "unavailable", "muted", "sleep 45m0s"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status %q missing %q", out, want)
 		}

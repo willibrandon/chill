@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -129,7 +130,9 @@ func main() {
 		return
 	}
 	if flag.NArg() > 0 && flag.Arg(0) == "doctor" {
-		if err := runDoctor(flag.Args()[1:], os.Stdout); err != nil {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		if err := runDoctorContext(ctx, flag.Args()[1:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

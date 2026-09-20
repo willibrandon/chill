@@ -2,8 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
+	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +71,27 @@ func TestDiagnosticHelper(t *testing.T) {
 	switch os.Args[len(os.Args)-1] {
 	case "timeout":
 		time.Sleep(30 * time.Second)
+	case "tree":
+		exe, _ := os.Executable()
+		cmd := exec.Command(exe, "-test.run=^TestDiagnosticHelper$", "--", "child")
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			os.Exit(1)
+		}
+	case "child":
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(os.Getenv("CHILL_DIAGNOSTIC_READY"), []byte(listener.Addr().String()), 0600); err != nil {
+			os.Exit(3)
+		}
+		conn, err := listener.Accept()
+		if err != nil {
+			os.Exit(4)
+		}
+		defer conn.Close()
+		time.Sleep(30 * time.Second)
 	case "output":
 		os.Stdout.WriteString(strings.Repeat("x", diagnosticLimit*2) + "last stdout")
 		os.Stderr.WriteString(strings.Repeat("y", diagnosticLimit*2) + "last stderr")
@@ -112,5 +138,56 @@ func TestDaemonStartupLog(t *testing.T) {
 	log.Close()
 	if readDaemonLog() != "" {
 		t.Fatal("new startup retained old diagnostics")
+	}
+}
+
+func TestDiagnosticCancellationKillsDescendants(t *testing.T) {
+	t.Setenv("CHILL_DIAGNOSTIC_HELPER", "1")
+	ready := filepath.Join(t.TempDir(), "ready")
+	t.Setenv("CHILL_DIAGNOSTIC_READY", ready)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := diagnosticCommandContext(ctx, exe, 20*time.Second, "-test.run=^TestDiagnosticHelper$", "--", "tree")
+		result <- err
+	}()
+	var address []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for len(address) == 0 {
+		address, _ = os.ReadFile(ready)
+		if time.Now().After(deadline) {
+			t.Fatal("diagnostic descendant did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	conn, err := net.DialTimeout("tcp", string(address), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation did not finish promptly")
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = conn.Read(make([]byte, 1))
+	var netErr net.Error
+	if err == nil || errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("descendant survived cancellation: %v", err)
+	}
+	// Cancelling before dispatch must not even try to start the command.
+	_, _, err = diagnosticCommandContext(ctx, "nonexistent-diagnostic", time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-cancelled command started: %v", err)
 	}
 }

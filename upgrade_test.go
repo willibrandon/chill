@@ -49,6 +49,12 @@ func TestLegacyPlaybackSnapshot(t *testing.T) {
 	if err != nil || snapshot.Station == nil || snapshot.Station.URL != "https://example.com" || !snapshot.SleepUntil.Equal(now.Add(time.Minute)) {
 		t.Fatalf("snapshot with removed station URL: %+v, %v", snapshot, err)
 	}
+	for _, paused := range []bool{false, true} {
+		snapshot, err = snapshotPlayback(Status{Station: "sleep", State: "reconnecting", Paused: paused, Volume: 32, Muted: true}, now)
+		if err != nil || snapshot.Station == nil || snapshot.Paused != paused || snapshot.Volume != 32 || !snapshot.Muted {
+			t.Fatalf("reconnecting snapshot: %+v, %v", snapshot, err)
+		}
+	}
 }
 
 func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {

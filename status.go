@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,7 +13,11 @@ import (
 // inspectDaemon is read-only: it must not run the upgrade handshake, start a
 // daemon, or mask a stale discovery file as a normally stopped daemon.
 func inspectDaemon() (*Status, error) {
-	raw, err := sendRawCommand("status")
+	return inspectDaemonContext(context.Background())
+}
+
+func inspectDaemonContext(ctx context.Context) (*Status, error) {
+	raw, err := sendRawCommandContext(ctx, "status")
 	if err != nil {
 		if _, statErr := os.Stat(socketPath()); os.IsNotExist(statErr) {
 			return nil, nil

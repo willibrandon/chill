@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,11 +35,20 @@ func sendCommand(cmd string) (string, error) {
 
 // sendRawCommand is used during the upgrade handshake, already under the lock.
 func sendRawCommand(cmd string) (string, error) {
+	return sendRawCommandContext(context.Background(), cmd)
+}
+
+func sendRawCommandContext(ctx context.Context, cmd string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	conn, err := dialSocket()
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 
@@ -218,6 +228,9 @@ func statusFacts(s *Status) []string {
 		}
 	}
 	facts := []string{state}
+	if s.Paused && state != "paused" {
+		facts = append(facts, "paused")
+	}
 	if s.Station != "" {
 		facts = append(facts, s.Station)
 	}
@@ -232,8 +245,12 @@ func statusFacts(s *Status) []string {
 		facts = append(facts, "sleep "+s.Sleep)
 	}
 	if s.Error != "" {
-		if s.State == "loading" {
-			facts = append(facts, fmt.Sprintf("retry %d/%d", s.Retries, maxRetries))
+		if s.State == "loading" || s.State == "reconnecting" {
+			retry := fmt.Sprintf("retry %d", s.Retries)
+			if !s.RetryAt.IsZero() {
+				retry += " in " + max(time.Duration(0), time.Until(s.RetryAt)).Round(time.Second).String()
+			}
+			facts = append(facts, retry)
 		}
 		facts = append(facts, s.Error)
 	}

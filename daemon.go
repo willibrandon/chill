@@ -18,7 +18,7 @@ import (
 // defaultVolume is used until a volume has been saved.
 const defaultVolume = 70
 
-const maxRetries = 3
+const maxRetryDelay = 30 * time.Second
 
 const daemonProtocol = 1
 
@@ -33,10 +33,11 @@ type Daemon struct {
 	paused          bool     // whether playback is paused
 	muted           bool
 	volume          int    // 0-100, applied to mpv whenever it changes
-	state           string // idle, loading, playing, paused, failed
+	state           string // idle, loading, reconnecting, playing, paused, failed
 	lastError       string
 	retries         int
 	retryTimer      *time.Timer
+	retryAt         time.Time
 	loadTimer       *time.Timer
 	generation      uint64 // invalidates callbacks after switching or stopping
 	sleepTimer      *time.Timer
@@ -61,6 +62,7 @@ type Status struct {
 	State      string    `json:"state"`
 	Error      string    `json:"error,omitempty"`
 	Retries    int       `json:"retries,omitempty"`
+	RetryAt    time.Time `json:"retry_at,omitzero"`
 	Sleep      string    `json:"sleep,omitempty"`
 	SleepUntil time.Time `json:"sleep_until,omitzero"`
 }
@@ -199,6 +201,9 @@ func (d *Daemon) play(name string) string {
 // startPlayback is called under mu, both for a new station and a reconnect.
 func (d *Daemon) startPlayback() error {
 	d.state = "loading"
+	if d.retries > 0 {
+		d.state = "reconnecting"
+	}
 	start := d.newPlayer
 	if start == nil {
 		start = startPlayer
@@ -237,7 +242,7 @@ func (d *Daemon) startPlayback() error {
 	d.loadTimer = time.AfterFunc(45*time.Second, func() {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.player == p && d.state == "loading" {
+		if d.player == p && (d.state == "loading" || d.state == "reconnecting") {
 			d.playbackFailed("stream took too long to load")
 		}
 	})
@@ -265,32 +270,37 @@ func (d *Daemon) playerEvent(e playerEvent) {
 func (d *Daemon) playbackFailed(reason string) {
 	d.closePlayer()
 	d.lastError = reason
-	d.state = "failed"
-	// A minute of successful playback replenishes the retry budget. Rapid
-	// load/disconnect loops still stop after three reconnects.
+	// A minute of successful playback resets the backoff. Short-lived loads
+	// keep their backoff so an unavailable stream never creates a tight loop.
 	if !d.startedAt.IsZero() && time.Since(d.startedAt) >= time.Minute {
 		d.retries = 0
 	}
 	d.startedAt = time.Time{}
-	if d.retries >= maxRetries {
-		d.paused = false
-		return
-	}
-	delay := time.Second << d.retries
+	delay := retryDelay(d.retries)
 	d.retries++
-	d.state = "loading"
+	d.state = "reconnecting"
+	d.retryAt = time.Now().Add(delay)
 	generation := d.generation
 	d.retryTimer = time.AfterFunc(delay, func() {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if d.generation != generation {
-			return
-		}
-		d.retryTimer = nil
-		if err := d.startPlayback(); err != nil {
-			d.playbackFailed(err.Error())
-		}
+		d.retryPlayback(generation)
 	})
+}
+
+func retryDelay(retries int) time.Duration {
+	return min(time.Second<<min(max(retries, 0), 5), maxRetryDelay)
+}
+
+func (d *Daemon) retryPlayback(generation uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.generation != generation || d.station == nil {
+		return
+	}
+	d.retryTimer = nil
+	d.retryAt = time.Time{}
+	if err := d.startPlayback(); err != nil {
+		d.playbackFailed(err.Error())
+	}
 }
 
 func (d *Daemon) pause() string {
@@ -438,6 +448,7 @@ func (d *Daemon) kill() {
 	d.state, d.lastError = "idle", ""
 	d.startedAt = time.Time{}
 	d.retries = 0
+	d.retryAt = time.Time{}
 }
 
 func (d *Daemon) status() string {
@@ -445,12 +456,13 @@ func (d *Daemon) status() string {
 		Version:    buildVersion(),
 		Protocol:   daemonProtocol,
 		Playing:    d.state == "playing",
-		Paused:     d.state == "paused",
+		Paused:     d.paused,
 		Volume:     d.volume,
 		Muted:      d.muted,
 		State:      d.state,
 		Error:      d.lastError,
 		Retries:    d.retries,
+		RetryAt:    d.retryAt,
 		SleepUntil: d.sleepUntil,
 	}
 	if s.State == "" {

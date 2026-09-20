@@ -28,6 +28,7 @@ var replCommands = []replCommand{
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
 	{"doctor", "[options]", "check setup and streams (--help for options)"},
+	{"cancel", "", "cancel diagnostics and discard queued commands"},
 	{"list", "", "list all stations"},
 	{"add", "<name> <url> [desc]", "save a station to the config"},
 	{"remove", "<name>", "remove a custom station or override"},
