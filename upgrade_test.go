@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// TestDaemonUpgradeCompatibility checks which version pairs require a daemon replacement.
 func TestDaemonUpgradeCompatibility(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -32,6 +33,7 @@ func TestDaemonUpgradeCompatibility(t *testing.T) {
 	}
 }
 
+// TestLegacyPlaybackSnapshot checks old daemon state can be restored by a new client.
 func TestLegacyPlaybackSnapshot(t *testing.T) {
 	now := time.Now()
 	snapshot, err := snapshotPlayback(Status{Station: "lofi-girl", Playing: true, Volume: 90}, now)
@@ -57,6 +59,7 @@ func TestLegacyPlaybackSnapshot(t *testing.T) {
 	}
 }
 
+// TestRestoreKeepsPauseMuteAndSleepDeadline checks playback settings survive replacement.
 func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {
 	d := fakeDaemon(t)
 	starts := 0
@@ -81,6 +84,7 @@ func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {
 	}
 }
 
+// TestRestoreDoesNotRestartExpiredSleepTimer checks expired playback remains stopped.
 func TestRestoreDoesNotRestartExpiredSleepTimer(t *testing.T) {
 	d := fakeDaemon(t)
 	d.newPlayer = func(int, bool, bool) (player, error) {
@@ -97,6 +101,7 @@ func TestRestoreDoesNotRestartExpiredSleepTimer(t *testing.T) {
 	}
 }
 
+// TestDaemonLockReleasedOnClose checks closing a lock permits the next client to acquire it.
 func TestDaemonLockReleasedOnClose(t *testing.T) {
 	withConfigDir(t)
 	unlock, err := lockDaemon()

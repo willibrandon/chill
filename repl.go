@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,11 @@ var replCommands = []replCommand{
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
 	{"viz", "[mode|off|list]", "show or select a REPL visualizer (F2 to focus)"},
+	{"podcasts", "[command|feed-url]", "browse podcasts (F3; --help for commands)"},
+	{"seek", "<seconds>", "jump within an episode (-30, +30, 2m)"},
+	{"speed", "[0.5-3]", "set podcast playback speed"},
+	{"next", "", "play the next queued episode"},
+	{"prev", "", "restart an episode or play the previous one"},
 	{"doctor", "[options]", "check setup and streams (--help for options)"},
 	{"cancel", "", "cancel diagnostics and discard queued commands"},
 	{"list", "", "list all stations"},
@@ -97,6 +103,14 @@ func suggest(input string) []suggestion {
 		}
 		for _, name := range []string{"off", "on", "next", "prev", "list", "fullscreen"} {
 			candidates = append(candidates, suggestion{text: name, desc: "visualizer control"})
+		}
+
+	case (strings.EqualFold(words[0], "podcasts") || strings.EqualFold(words[0], "podcast")) && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, name := range []string{"top", "search", "categories", "category", "episodes", "subscribe", "unsubscribe", "subscriptions", "country", "play", "latest", "queue", "clear", "--help"} {
+			candidates = append(candidates, suggestion{text: name, desc: "podcast command", takes: name == "search" || name == "play" || name == "episodes" || name == "subscribe" || name == "unsubscribe" || name == "category"})
 		}
 
 	case strings.EqualFold(words[0], "doctor"):
@@ -213,6 +227,12 @@ func execute(input string) (string, error) {
 	var err error
 
 	switch cmd {
+	case "podcasts", "podcast":
+		return runPodcastCommand(context.Background(), parts[1:])
+	case "seek":
+		return clientSeek(arg)
+	case "speed", "next", "prev":
+		return clientPodcastControl(cmd, arg)
 	case "play":
 		if arg == "" {
 			arg = defaultStation()

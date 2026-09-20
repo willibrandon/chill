@@ -86,6 +86,8 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 	r.program(ctx, "yt-dlp", extractor)
 	ffmpeg, _ := exec.LookPath("ffmpeg")
 	r.program(ctx, "ffmpeg", ffmpeg)
+	ffprobe, _ := exec.LookPath("ffprobe")
+	r.program(ctx, "ffprobe", ffprobe)
 	if deno, _ := exec.LookPath("deno"); deno != "" {
 		r.program(ctx, "deno", deno)
 	} else {
@@ -99,6 +101,12 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 		r.check("FAIL", "config", err.Error()+"; fix stations.json, then rerun doctor")
 	} else {
 		r.check("OK", "config", fmt.Sprintf("%s (%d stations, default %s; missing file uses built-ins)", configPath(), len(stationSnapshot()), defaultStation()))
+	}
+
+	if library, err := loadPodcastLibrary(); err != nil {
+		r.check("FAIL", "podcasts", err.Error()+"; check "+podcastPath())
+	} else {
+		r.check("OK", "podcasts", fmt.Sprintf("%d subscriptions, chart country %s", len(library.Subscriptions), library.Country))
 	}
 
 	s, daemonErr := inspectDaemonContext(ctx)
@@ -199,7 +207,7 @@ func (r *doctorReport) program(ctx context.Context, name, path string) {
 		return
 	}
 	flag := "--version"
-	if name == "ffmpeg" {
+	if name == "ffmpeg" || name == "ffprobe" {
 		flag = "-version"
 	}
 	stdout, stderr, err := diagnosticCommandContext(ctx, path, 5*time.Second, flag)
@@ -272,7 +280,9 @@ func diagnosticCommandContext(ctx context.Context, path string, timeout time.Dur
 }
 
 type streamInfo struct {
-	Title      string `json:"title"`
+	// Title is the extractor's display title for the stream.
+	Title string `json:"title"`
+	// LiveStatus identifies whether the source is currently live.
 	LiveStatus string `json:"live_status"`
 }
 

@@ -15,6 +15,7 @@ func (*audioTestPlayer) audioFrame() audio.Frame {
 	return audio.Frame{At: time.Now(), Sequence: 1, Peak: [2]float64{0.8, 0.2}}
 }
 
+// TestVisualizerSubscriptionPauseAndSlowReader checks stalled clients cannot block playback controls.
 func TestVisualizerSubscriptionPauseAndSlowReader(t *testing.T) {
 	d := &Daemon{state: "playing", player: &audioTestPlayer{}, generation: 7}
 	client, server := net.Pipe()
@@ -57,6 +58,7 @@ func TestVisualizerSubscriptionPauseAndSlowReader(t *testing.T) {
 	}
 }
 
+// TestVisualizerClientCloseEndsSubscription checks disconnected subscriptions exit promptly.
 func TestVisualizerClientCloseEndsSubscription(t *testing.T) {
 	d := &Daemon{state: "idle"}
 	client, server := net.Pipe()

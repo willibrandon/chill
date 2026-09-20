@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// TestPackageInstallDetection checks package-manager executable paths.
 func TestPackageInstallDetection(t *testing.T) {
 	for _, tt := range []struct{ path, command string }{
 		{"/opt/homebrew/Cellar/chill/0.5.0/bin/chill", "brew upgrade willibrandon/tap/chill"},
@@ -26,6 +27,7 @@ func TestPackageInstallDetection(t *testing.T) {
 	}
 }
 
+// TestPackageUpdateDoesNotDownloadOrReplace checks managed installs use their package manager.
 func TestPackageUpdateDoesNotDownloadOrReplace(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "Cellar", "chill", "0.5.0", "bin")
 	if err := os.MkdirAll(dir, 0700); err != nil {

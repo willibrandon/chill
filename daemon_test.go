@@ -21,6 +21,7 @@ func wantReply(t *testing.T, raw string, ok bool, contains string) {
 	}
 }
 
+// TestVolumeCommand covers absolute, relative, and invalid volume changes.
 func TestVolumeCommand(t *testing.T) {
 	withConfigDir(t)
 	d := &Daemon{volume: defaultVolume}
@@ -56,6 +57,7 @@ func TestVolumeCommand(t *testing.T) {
 	}
 }
 
+// TestMuteRoundTrip checks muting preserves the configured volume.
 func TestMuteRoundTrip(t *testing.T) {
 	d := &Daemon{volume: 55}
 
@@ -70,22 +72,26 @@ func TestMuteRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPauseWithoutPlayback checks an idle player cannot be paused.
 func TestPauseWithoutPlayback(t *testing.T) {
 	d := &Daemon{}
 	wantReply(t, d.pause(), false, "nothing playing")
 	wantReply(t, d.resume(), false, "nothing playing")
 }
 
+// TestUnknownStation checks unknown station names return a failure.
 func TestUnknownStation(t *testing.T) {
 	d := &Daemon{volume: defaultVolume}
 	wantReply(t, d.play("bogus"), false, "unknown station")
 }
 
+// TestUnknownCommand checks unsupported daemon requests return a failure.
 func TestUnknownCommand(t *testing.T) {
 	d := &Daemon{}
 	wantReply(t, d.execute("bogus", ""), false, "unknown command")
 }
 
+// TestStatusJSON checks daemon state is represented in its JSON response.
 func TestStatusJSON(t *testing.T) {
 	d := &Daemon{volume: 42}
 	var s Status

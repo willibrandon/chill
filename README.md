@@ -1,6 +1,6 @@
 # chill
 
-Terminal lofi radio. 24/7 streams from YouTube.
+Terminal radio and podcast player.
 
 ![chill playing chillhop with a live spectrum visualizer and command suggestions in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
 
@@ -68,6 +68,10 @@ Use `chill update` for Go installs and release binaries,
 chill                   # play default station (starts daemon automatically)
 chill chillhop          # play specific station
 chill -i                # interactive mode (repl)
+chill podcasts          # browse podcasts
+chill podcasts --help   # podcast CLI commands
+chill seek -30          # jump back 30 seconds in an episode
+chill speed 1.5         # podcast playback speed
 chill --skip            # skip to random station
 chill --toggle          # pause/resume
 chill --vol 60          # set volume (also +5, -10, up, down)
@@ -189,7 +193,21 @@ Quitting also cancels diagnostics; music keeps playing.
 | `Ctrl+L` | clear the screen |
 | `F1` | help |
 | `F2` | open/focus the visualizer; return to the prompt when focused |
+| `F3` | open podcasts or return to the prompt |
 | `Ctrl+Q` | quit, music keeps playing |
+
+### Podcasts
+
+Press **F3** or run `chill podcasts` for Apple's top shows, 19 categories,
+search, and your subscriptions. You can also open any podcast RSS URL.
+**Enter** opens a show or plays an episode; **f** subscribes locally.
+**Shift+←/→** skips 30 seconds, **Space** pauses, and **F3** returns to the prompt.
+Listening progress is saved automatically. No account or API key.
+
+Use `chill podcasts --help` for CLI commands, including search, feeds,
+subscriptions, and queueing. `--json` is available for scripting.
+
+![Browsing podcast episodes in Chill](assets/podcasts.png)
 
 ### Visualizers
 
@@ -212,7 +230,7 @@ Use `--fg` to run in the terminal with mpv controls:
 
 ## Build and test
 
-Install mpv and FFmpeg first. The normal test suite includes real playback
+Install mpv and FFmpeg (including ffprobe) first. The normal test suite includes real playback
 integration tests using generated local audio and null output—no audio device,
 network access, or test opt-in environment variables are needed. Missing test
 dependencies fail with installation instructions.

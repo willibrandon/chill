@@ -20,6 +20,7 @@ var Modes = []string{
 	"tunnel", "starburst", "led", "vu", "balance",
 }
 
+// Index returns a mode's position in Modes, or -1 if the name is unknown.
 func Index(name string) int {
 	for i, mode := range Modes {
 		if mode == name {
@@ -33,6 +34,7 @@ func Index(name string) int {
 // fixed-size history. Advance is separate from Render, so resize/redraw cannot
 // advance animation. The subscriber, rather than terminal redraws, drives time.
 type Renderer struct {
+	// Frame is the most recently supplied audio snapshot.
 	Frame     audio.Frame
 	levels    [audio.Bands]float64
 	peaks     [audio.Bands]float64
@@ -44,8 +46,10 @@ type Renderer struct {
 	holdUntil [2]time.Time
 }
 
+// Reset clears audio, smoothing, peak holds, and animation history.
 func (r *Renderer) Reset() { *r = Renderer{} }
 
+// Level maps a linear amplitude onto a clamped -60 to 0 dB display scale.
 func Level(x float64) float64 {
 	if x <= 0 {
 		return 0
@@ -53,6 +57,7 @@ func Level(x float64) float64 {
 	return min(1, max(0, (20*math.Log10(x)+60)/60))
 }
 
+// Advance updates presentation state using an audio frame and elapsed time.
 func (r *Renderer) Advance(f audio.Frame, now time.Time) {
 	dt := 1.0 / 30
 	if !r.last.IsZero() {
@@ -126,6 +131,7 @@ func (c *canvas) line(x0, y0, x1, y1 int, char rune, color int) {
 
 var colors = []string{"\x1b[38;5;238m", "\x1b[38;5;60m", "\x1b[38;5;67m", "\x1b[38;5;74m", "\x1b[38;5;80m", "\x1b[38;5;116m", "\x1b[38;5;159m", "\x1b[38;5;231m", "\x1b[38;5;114m", "\x1b[38;5;220m", "\x1b[38;5;203m"}
 
+// String encodes the canvas as fixed-width rows with ANSI foreground colors.
 func (c *canvas) String() string {
 	var b strings.Builder
 	for y := range c.height {

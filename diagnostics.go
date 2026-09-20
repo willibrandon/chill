@@ -17,6 +17,7 @@ type tailBuffer struct {
 	data []byte
 }
 
+// Write retains only the newest diagnosticLimit bytes of subprocess output.
 func (b *tailBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -32,6 +33,7 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// String returns a trimmed copy of the buffered diagnostics.
 func (b *tailBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

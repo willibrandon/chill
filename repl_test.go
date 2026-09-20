@@ -5,12 +5,14 @@ import (
 	"testing"
 )
 
+// TestSuggestEmpty checks an empty prompt does not open suggestions.
 func TestSuggestEmpty(t *testing.T) {
 	if got := suggest(""); got != nil {
 		t.Errorf("suggest(\"\") = %v, want nil", got)
 	}
 }
 
+// TestSuggestFirstWord checks command prefix completion.
 func TestSuggestFirstWord(t *testing.T) {
 	matches := suggest("pl")
 
@@ -27,6 +29,7 @@ func TestSuggestFirstWord(t *testing.T) {
 	}
 }
 
+// TestSuggestStationNames checks station shorthand completion.
 func TestSuggestStationNames(t *testing.T) {
 	matches := suggest("ch")
 
@@ -41,6 +44,7 @@ func TestSuggestStationNames(t *testing.T) {
 	}
 }
 
+// TestSuggestPlayArgument checks station arguments after play.
 func TestSuggestPlayArgument(t *testing.T) {
 	// after "play " only stations are offered
 	matches := suggest("play ")
@@ -60,6 +64,7 @@ func TestSuggestPlayArgument(t *testing.T) {
 	}
 }
 
+// TestSuggestVolArgument checks relative volume suggestions.
 func TestSuggestVolArgument(t *testing.T) {
 	matches := suggest("vol ")
 	if len(matches) != 2 || matches[0].text != "up" || matches[1].text != "down" {
@@ -72,6 +77,7 @@ func TestSuggestVolArgument(t *testing.T) {
 	}
 }
 
+// TestSuggestDoctor checks diagnostic options and their arguments.
 func TestSuggestDoctor(t *testing.T) {
 	for _, tt := range []struct {
 		input string
@@ -106,6 +112,7 @@ func TestSuggestDoctor(t *testing.T) {
 	}
 }
 
+// TestExecuteDoctorHelp checks diagnostic help through the REPL.
 func TestExecuteDoctorHelp(t *testing.T) {
 	withConfigDir(t)
 	t.Setenv("PATH", t.TempDir())
@@ -119,6 +126,7 @@ func TestExecuteDoctorHelp(t *testing.T) {
 	}
 }
 
+// TestSuggestExactMatchCompletesNothing checks already complete words stay unchanged.
 func TestSuggestExactMatchCompletesNothing(t *testing.T) {
 	// typing out a full word leaves nothing to complete
 	if got := suggest("skip"); got != nil {
@@ -126,12 +134,14 @@ func TestSuggestExactMatchCompletesNothing(t *testing.T) {
 	}
 }
 
+// TestSuggestStopsAfterArgument checks completed commands do not suggest extra arguments.
 func TestSuggestStopsAfterArgument(t *testing.T) {
 	if got := suggest("play sleep "); got != nil {
 		t.Errorf("suggest(\"play sleep \") = %v, want nil", got)
 	}
 }
 
+// TestAcceptSuggestion checks word replacement and argument spacing.
 func TestAcceptSuggestion(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -152,6 +162,7 @@ func TestAcceptSuggestion(t *testing.T) {
 	}
 }
 
+// TestExecuteUnknown checks unknown REPL input produces an error.
 func TestExecuteUnknown(t *testing.T) {
 	if _, err := execute("bogus"); err == nil {
 		t.Error("execute(\"bogus\") should fail")
@@ -161,6 +172,7 @@ func TestExecuteUnknown(t *testing.T) {
 	}
 }
 
+// TestExecuteKeepsArgumentCase checks descriptions retain their original spelling.
 func TestExecuteKeepsArgumentCase(t *testing.T) {
 	// descriptions in "add" keep their case even though the command is lowered
 	cmd := "ADD My-Mix https://example.com Chill Beats"
@@ -177,6 +189,7 @@ func TestExecuteKeepsArgumentCase(t *testing.T) {
 	}
 }
 
+// TestHistory checks command history persistence and duplicate handling.
 func TestHistory(t *testing.T) {
 	h := &history{} // no path, memory only
 

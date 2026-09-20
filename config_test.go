@@ -34,6 +34,7 @@ func withConfigDir(t *testing.T) string {
 	return filepath.Join(cfgDir, "chill", "stations.json")
 }
 
+// TestReloadRemovesDeletedStationsAndRestoresBuiltins checks edits replace the in-memory catalog.
 func TestReloadRemovesDeletedStationsAndRestoresBuiltins(t *testing.T) {
 	path := withConfigDir(t)
 	writeConfig(t, path, `{"stations":[{"name":"custom","url":"https://example.com"},{"name":"lofi-girl","url":"https://example.com/override"}],"default_station":"custom"}`)
@@ -59,6 +60,7 @@ func TestReloadRemovesDeletedStationsAndRestoresBuiltins(t *testing.T) {
 	}
 }
 
+// TestStationManagement covers adding, removing, and choosing default stations.
 func TestStationManagement(t *testing.T) {
 	path := withConfigDir(t)
 	if _, err := saveStation([]string{"My-Mix", "https://example.com", "My mix"}); err != nil {
@@ -89,6 +91,7 @@ func TestStationManagement(t *testing.T) {
 	}
 }
 
+// TestRememberedVolume checks saved levels and the first-run default.
 func TestRememberedVolume(t *testing.T) {
 	withConfigDir(t)
 	if rememberedVolume() != defaultVolume {
@@ -122,6 +125,7 @@ func writeConfig(t *testing.T, path, body string) {
 	}
 }
 
+// TestLoadConfigMissing checks the empty configuration used before first save.
 func TestLoadConfigMissing(t *testing.T) {
 	withConfigDir(t)
 	cfg, err := loadConfig()
@@ -133,6 +137,7 @@ func TestLoadConfigMissing(t *testing.T) {
 	}
 }
 
+// TestLoadConfigBadJSON checks malformed configuration is reported.
 func TestLoadConfigBadJSON(t *testing.T) {
 	path := withConfigDir(t)
 	writeConfig(t, path, "{nope")
@@ -142,6 +147,7 @@ func TestLoadConfigBadJSON(t *testing.T) {
 	}
 }
 
+// TestLoadUserStations checks custom stations and built-in overrides.
 func TestLoadUserStations(t *testing.T) {
 	path := withConfigDir(t)
 	writeConfig(t, path, `{"stations": [

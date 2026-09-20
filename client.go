@@ -228,6 +228,23 @@ func statusFacts(s *Status) []string {
 		}
 	}
 	facts := []string{state}
+	if s.Episode != nil {
+		duration := "?"
+		if s.Duration > 0 {
+			duration = clock(s.Duration)
+		}
+		facts = append(facts, clock(s.Position)+" / "+duration)
+		if s.Speed != 0 && s.Speed != 1 {
+			facts = append(facts, fmt.Sprintf("%.2fx", s.Speed))
+		}
+		if s.Queued > 0 {
+			facts = append(facts, fmt.Sprintf("queued %d", s.Queued))
+		}
+		facts = append(facts, s.Episode.Show, s.Episode.Title)
+	}
+	if s.StorageError != "" {
+		facts = append(facts, s.StorageError)
+	}
 	if s.Paused && state != "paused" {
 		facts = append(facts, "paused")
 	}
@@ -359,7 +376,7 @@ func clientSleep(arg string) (string, error) {
 		}
 	}
 	if !isDaemonRunning() {
-		return "", fmt.Errorf("nothing playing; start a station before setting a sleep timer")
+		return "", fmt.Errorf("nothing playing; start a station or podcast before setting a sleep timer")
 	}
 	return ask("sleep " + arg)
 }

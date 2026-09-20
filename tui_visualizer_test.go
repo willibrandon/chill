@@ -18,6 +18,7 @@ func vizKey(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
 }
 
+// TestVisualizerFocusPreservesPrompt checks visualizer shortcuts preserve command drafts.
 func TestVisualizerFocusPreservesPrompt(t *testing.T) {
 	withConfigDir(t)
 	tui := newTUI()
@@ -59,6 +60,7 @@ func TestVisualizerFocusPreservesPrompt(t *testing.T) {
 	}
 }
 
+// TestVisualizerLayoutAndCursor checks compact, fullscreen, and resized layouts.
 func TestVisualizerLayoutAndCursor(t *testing.T) {
 	withConfigDir(t)
 	tui := newTUI()
@@ -98,6 +100,7 @@ func TestVisualizerLayoutAndCursor(t *testing.T) {
 	}
 }
 
+// TestVisualizerHidingClosesAndRejectsLateConnections checks hidden views release subscriptions.
 func TestVisualizerHidingClosesAndRejectsLateConnections(t *testing.T) {
 	withConfigDir(t)
 	tui := newTUI()
@@ -124,6 +127,7 @@ func TestVisualizerHidingClosesAndRejectsLateConnections(t *testing.T) {
 	}
 }
 
+// TestVisualizerPausedAndStaleFramesClear checks unavailable audio clears old frames.
 func TestVisualizerPausedAndStaleFramesClear(t *testing.T) {
 	withConfigDir(t)
 	tui := newTUI()

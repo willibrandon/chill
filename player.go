@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type playerEvent struct {
 	loaded bool
+	ended  bool
 	err    string
 }
 
@@ -26,25 +28,36 @@ type player interface {
 }
 
 type mpvMessage struct {
-	RequestID int    `json:"request_id"`
-	Error     string `json:"error"`
-	Event     string `json:"event"`
-	Reason    string `json:"reason"`
+	// Name identifies an observed property.
+	Name string `json:"name"`
+	// Data contains the property's encoded JSON value.
+	Data json.RawMessage `json:"data"`
+	// RequestID correlates acknowledgements with commands.
+	RequestID int `json:"request_id"`
+	// Error is mpv's command result code.
+	Error string `json:"error"`
+	// Event names the asynchronous player event.
+	Event string `json:"event"`
+	// Reason identifies why the loaded media ended.
+	Reason string `json:"reason"`
+	// FileError describes an end-of-file playback failure.
 	FileError string `json:"file_error"`
-	Text      string `json:"text"`
+	// Text contains a player log message.
+	Text string `json:"text"`
 }
 
 type mpvPlayer struct {
-	conn   net.Conn
-	tree   *processTree
-	exited chan struct{}
-	done   chan struct{}
-	once   sync.Once
-	dir    string
-	mu     sync.Mutex // serializes commands and request IDs
-	id     int
-	reply  chan mpvMessage
-	event  chan playerEvent
+	conn       net.Conn
+	tree       *processTree
+	exited     chan struct{}
+	done       chan struct{}
+	once       sync.Once
+	dir        string
+	mu         sync.Mutex // serializes commands and request IDs
+	id         int
+	reply      chan mpvMessage
+	event      chan playerEvent
+	positionNS atomic.Int64
 }
 
 func startMPV(volume int, muted, paused bool, input io.Reader, options []string) (*mpvPlayer, error) {
@@ -95,6 +108,10 @@ func startMPV(volume int, muted, paused bool, input io.Reader, options []string)
 		p.close()
 		return nil, err
 	}
+	if err := p.command("observe_property", 1, "time-pos"); err != nil {
+		p.close()
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -133,6 +150,13 @@ func (p *mpvPlayer) read() {
 			continue
 		}
 		switch m.Event {
+		case "property-change":
+			if m.Name == "time-pos" && string(m.Data) != "null" {
+				var seconds float64
+				if json.Unmarshal(m.Data, &seconds) == nil && seconds >= 0 {
+					p.positionNS.Store(int64(seconds * float64(time.Second)))
+				}
+			}
 		case "log-message":
 			lastError = strings.TrimSpace(m.Text)
 			if len(lastError) > 500 {
@@ -142,6 +166,10 @@ func (p *mpvPlayer) read() {
 			lastError = ""
 			p.emit(playerEvent{loaded: true})
 		case "end-file":
+			if m.Reason == "eof" && m.FileError == "" {
+				p.emit(playerEvent{ended: true})
+				continue
+			}
 			// Playlist/URL redirects end the intermediate file before mpv
 			// starts its resolved target; they are not playback failures.
 			if m.Reason == "stop" || m.Reason == "quit" || m.Reason == "redirect" {

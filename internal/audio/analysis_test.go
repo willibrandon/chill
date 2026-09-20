@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestStereoTone checks known frequency, amplitude, and stereo measurements.
 func TestStereoTone(t *testing.T) {
 	var samples [2][WindowSize]float64
 	// Bin-centered tone makes peak amplitude and frequency independently known.
@@ -40,6 +41,7 @@ func TestStereoTone(t *testing.T) {
 	}
 }
 
+// TestSilenceAndOppositePhase checks silence and prevents stereo phase cancellation.
 func TestSilenceAndOppositePhase(t *testing.T) {
 	if f := Analyze([2][WindowSize]float64{}); f != (Frame{}) {
 		t.Fatal("silence produced energy")
@@ -59,6 +61,7 @@ func TestSilenceAndOppositePhase(t *testing.T) {
 	}
 }
 
+// TestBufferWrapSanitizationAndConcurrentSnapshots checks bounded, race-free PCM capture.
 func TestBufferWrapSanitizationAndConcurrentSnapshots(t *testing.T) {
 	var b Buffer
 	pcm := make([]byte, WindowSize*3*8)

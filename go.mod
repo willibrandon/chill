@@ -10,6 +10,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.8
 	golang.org/x/mod v0.41.0
+	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.48.0
 )
 
@@ -27,4 +28,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 )

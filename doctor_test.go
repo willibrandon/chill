@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+// TestDoctorOptions covers diagnostic flag parsing and incompatible choices.
 func TestDoctorOptions(t *testing.T) {
 	for _, args := range [][]string{{"--stations", "--stream", "sleep"}, {"--timeout", "0s"}, {"--timeout", "-1s"}, {"extra"}, {"--unknown"}} {
 		if _, err := parseDoctorOptions(args, io.Discard); err == nil {
@@ -26,6 +27,7 @@ func TestDoctorOptions(t *testing.T) {
 	}
 }
 
+// TestDoctorRejectsIgnoredConfigEntries checks invalid station data is diagnosed.
 func TestDoctorRejectsIgnoredConfigEntries(t *testing.T) {
 	path := withConfigDir(t)
 	for _, config := range []string{
@@ -46,6 +48,7 @@ func TestDoctorRejectsIgnoredConfigEntries(t *testing.T) {
 	}
 }
 
+// TestDoctorMissingDependencies checks installation guidance without starting playback.
 func TestDoctorMissingDependencies(t *testing.T) {
 	withConfigDir(t)
 	t.Setenv("PATH", t.TempDir())
@@ -64,6 +67,7 @@ func TestDoctorMissingDependencies(t *testing.T) {
 	}
 }
 
+// TestDiagnosticHelper runs the subprocess fixtures used by diagnostic tests.
 func TestDiagnosticHelper(t *testing.T) {
 	if os.Getenv("CHILL_DIAGNOSTIC_HELPER") != "1" {
 		return
@@ -100,6 +104,7 @@ func TestDiagnosticHelper(t *testing.T) {
 	os.Exit(0)
 }
 
+// TestDiagnosticCommandsAreBounded checks output limits and subprocess deadlines.
 func TestDiagnosticCommandsAreBounded(t *testing.T) {
 	t.Setenv("CHILL_DIAGNOSTIC_HELPER", "1")
 	exe, err := os.Executable()
@@ -117,6 +122,7 @@ func TestDiagnosticCommandsAreBounded(t *testing.T) {
 	}
 }
 
+// TestDaemonStartupLog checks log retention and startup error details.
 func TestDaemonStartupLog(t *testing.T) {
 	withConfigDir(t)
 	log, err := openDaemonLog()
@@ -141,6 +147,7 @@ func TestDaemonStartupLog(t *testing.T) {
 	}
 }
 
+// TestDiagnosticCancellationKillsDescendants checks cancellation stops the entire process tree.
 func TestDiagnosticCancellationKillsDescendants(t *testing.T) {
 	t.Setenv("CHILL_DIAGNOSTIC_HELPER", "1")
 	ready := filepath.Join(t.TempDir(), "ready")

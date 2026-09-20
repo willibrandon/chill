@@ -16,10 +16,14 @@ const visualizerInterval = time.Second / 30
 // Each packet is a current snapshot; a slow consumer is disconnected rather
 // than retaining frames or holding up playback/control commands.
 type visualizerPacket struct {
-	Version    int         `json:"version"`
-	Generation uint64      `json:"generation"`
-	State      string      `json:"state"`
-	Frame      audio.Frame `json:"frame"`
+	// Version identifies the visualizer snapshot wire format.
+	Version int `json:"version"`
+	// Generation distinguishes playback replacements, including seeks.
+	Generation uint64 `json:"generation"`
+	// State carries the daemon's current playback state.
+	State string `json:"state"`
+	// Frame contains the current audio analysis, or zeros when not playing.
+	Frame audio.Frame `json:"frame"`
 }
 
 func (d *Daemon) serveVisualizer(conn net.Conn) {

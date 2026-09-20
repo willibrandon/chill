@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// TestTUIDoctorReportsFailedChecks checks diagnostic failures remain visible in the transcript.
 func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 	withConfigDir(t)
 	t.Setenv("PATH", t.TempDir())
@@ -44,7 +45,7 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 		}
 	}
 	transcript := ansi.Strip(strings.Join(model.lines, "\n"))
-	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", "no daemon running", "Doctor complete. Passed: 3, warnings: 1, failed: 3.", "doctor found problems"} {
+	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", "[FAIL] ffprobe", "no daemon running", "Doctor complete. Passed: 4, warnings: 1, failed: 4.", "doctor found problems"} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q: %s", want, transcript)
 		}
@@ -57,6 +58,7 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 	}
 }
 
+// TestTUICommandSpinnerLifecycle checks busy indicators start and stop with commands.
 func TestTUICommandSpinnerLifecycle(t *testing.T) {
 	withConfigDir(t)
 	for _, result := range []resultMsg{{out: "done"}, {err: errors.New("check failed")}} {
@@ -84,6 +86,7 @@ func TestTUICommandSpinnerLifecycle(t *testing.T) {
 	}
 }
 
+// TestTUIQueuedCommandGetsFreshSpinner checks old animation ticks cannot affect a new command.
 func TestTUIQueuedCommandGetsFreshSpinner(t *testing.T) {
 	withConfigDir(t)
 	model := newTUI()
@@ -107,6 +110,7 @@ func TestTUIQueuedCommandGetsFreshSpinner(t *testing.T) {
 	}
 }
 
+// TestTUISpinnerAppearsBesideSubmittedCommand checks animation stays beside its command.
 func TestTUISpinnerAppearsBesideSubmittedCommand(t *testing.T) {
 	withConfigDir(t)
 	model := newTUI()
@@ -139,6 +143,7 @@ func TestTUISpinnerAppearsBesideSubmittedCommand(t *testing.T) {
 	}
 }
 
+// TestTUIInlineSpinnerWrappingAndClear checks layout changes do not corrupt spinner placement.
 func TestTUIInlineSpinnerWrappingAndClear(t *testing.T) {
 	withConfigDir(t)
 	model := newTUI()
@@ -167,6 +172,7 @@ func TestTUIInlineSpinnerWrappingAndClear(t *testing.T) {
 	}
 }
 
+// TestTUIHelpIncludesDoctor checks diagnostic commands are discoverable in help.
 func TestTUIHelpIncludesDoctor(t *testing.T) {
 	if !isCommand("doctor") || !strings.Contains(replHelp(), "doctor") {
 		t.Fatal("doctor is missing from the REPL command registry")
@@ -178,6 +184,7 @@ func TestTUIHelpIncludesDoctor(t *testing.T) {
 	}
 }
 
+// TestTUIStreamingCancellationAndNextCommand checks cancellation releases the command queue.
 func TestTUIStreamingCancellationAndNextCommand(t *testing.T) {
 	withConfigDir(t)
 	model := newTUI()
@@ -238,6 +245,7 @@ func TestTUIStreamingCancellationAndNextCommand(t *testing.T) {
 	}
 }
 
+// TestREPLShutdownUnblocksDiagnosticWriter checks quitting releases blocked output writers.
 func TestREPLShutdownUnblocksDiagnosticWriter(t *testing.T) {
 	withConfigDir(t)
 	model := newTUI()

@@ -1,5 +1,5 @@
-// Package main implements chill, a terminal lofi radio that streams
-// 24/7 lofi beats from YouTube. It uses a client-server architecture
+// Package main implements chill, a terminal radio and podcast player.
+// It uses a client-server architecture
 // where a background daemon manages mpv playback and clients communicate
 // over a Unix socket.
 //
@@ -28,6 +28,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
+
+	"github.com/willibrandon/chill/internal/podcast"
 )
 
 const (
@@ -63,10 +65,10 @@ var vibes = []string{
 	"git push & chill",
 }
 
-// Station represents a lofi radio stream with a name, YouTube URL, and description.
+// Station represents a radio stream with a name, URL, and description.
 type Station struct {
 	Name string `json:"name"` // short identifier (e.g., "lofi-girl")
-	URL  string `json:"url"`  // YouTube video/stream URL
+	URL  string `json:"url"`  // video or direct stream URL
 	Desc string `json:"desc"` // human-readable description
 }
 
@@ -113,20 +115,90 @@ func main() {
 	// options
 	station := flag.String("station", "", "station to play")
 	vol := flag.String("vol", "", "set volume (0-100, +5, -10, up, down)")
+	seek := flag.String("seek", "", "jump within a podcast (-30, +30, 2m)")
+	speed := flag.String("speed", "", "set podcast playback speed (0.5-3)")
 
 	flag.Usage = printCLIHelp
 	flag.Parse()
 	enableANSI()
+	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast") {
+		printResult("", fmt.Errorf("--json is supported by status and podcast commands"))
+		return
+	}
+	if flag.NArg() > 0 {
+		args := flag.Args()
+		switch args[0] {
+		case "pause", "resume", "toggle", "stop", "mute":
+			if len(args) != 1 {
+				printResult("", fmt.Errorf("usage: chill %s", args[0]))
+				return
+			}
+			printResult(execute(args[0]))
+			return
+		case "play":
+			if len(args) == 1 {
+				printResult(clientResume())
+			} else if len(args) == 2 {
+				printResult(clientPlay(args[1]))
+			} else {
+				printResult("", fmt.Errorf("usage: chill play [station]"))
+			}
+			return
+		case "volume":
+			if len(args) > 2 {
+				printResult("", fmt.Errorf("usage: chill volume [level]"))
+				return
+			}
+			printResult(clientVolume(strings.Join(args[1:], " ")))
+			return
+		case "status":
+			if len(args) == 2 && args[1] == "--json" || len(args) == 1 && *jsonOutput {
+				printStatusJSON()
+			} else if len(args) == 1 {
+				printResult(clientStatus())
+			} else {
+				printResult("", fmt.Errorf("usage: chill status [--json]"))
+			}
+			return
+		}
+	}
+	if flag.NArg() > 0 && (flag.Arg(0) == "podcasts" || flag.Arg(0) == "podcast") {
+		args := flag.Args()[1:]
+		if *jsonOutput {
+			args = append(args, "--json")
+		}
+		if len(args) == 0 {
+			runRepl("")
+			return
+		}
+		if len(args) == 1 && podcast.ValidURL(args[0]) {
+			runRepl(args[0])
+			return
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		printResult(runPodcastCommand(ctx, args))
+		return
+	}
+	if flag.NArg() > 0 && (flag.Arg(0) == "seek" || flag.Arg(0) == "speed" || flag.Arg(0) == "next" || flag.Arg(0) == "prev") {
+		if *jsonOutput || flag.NArg() > 2 {
+			printResult("", fmt.Errorf("usage: chill %s [value]", flag.Arg(0)))
+			return
+		}
+		arg := strings.Join(flag.Args()[1:], " ")
+		if flag.Arg(0) == "seek" {
+			printResult(clientSeek(arg))
+		} else {
+			printResult(clientPodcastControl(flag.Arg(0), arg))
+		}
+		return
+	}
 	if *jsonOutput {
 		if !*status || flag.NArg() != 0 || flag.NFlag() != 2 {
 			fmt.Fprintln(os.Stderr, "usage: chill --status --json")
 			os.Exit(1)
 		}
-		out, err := statusJSON()
-		fmt.Println(out)
-		if err != nil {
-			os.Exit(1)
-		}
+		printStatusJSON()
 		return
 	}
 	if flag.NArg() > 0 && flag.Arg(0) == "doctor" {
@@ -177,6 +249,10 @@ func main() {
 		printResult(clientVolume(*vol))
 	case *mute:
 		printResult(clientMute())
+	case *seek != "":
+		printResult(clientSeek(*seek))
+	case *speed != "":
+		printResult(clientPodcastControl("speed", *speed))
 	case *fg:
 		// foreground mode (original behavior)
 		s := *station
@@ -197,6 +273,10 @@ func main() {
 		s := *station
 		if s == "" && flag.NArg() > 0 {
 			s = flag.Arg(0)
+		}
+		if podcast.ValidURL(s) {
+			runRepl(s)
+			return
 		}
 		printResult(clientPlay(s))
 	}
@@ -219,6 +299,14 @@ func printResult(out string, err error) {
 		os.Exit(1)
 	}
 	fmt.Println(out)
+}
+
+func printStatusJSON() {
+	out, err := statusJSON()
+	fmt.Println(out)
+	if err != nil {
+		os.Exit(1)
+	}
 }
 
 // printStations displays all available stations and usage information.

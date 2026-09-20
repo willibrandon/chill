@@ -36,6 +36,7 @@ jobs:
           python -m pip install --upgrade "yt-dlp[default]"
           mpv --version
           ffmpeg -version
+          ffprobe -version
           yt-dlp --version
           deno --version
       - name: Build

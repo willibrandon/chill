@@ -62,6 +62,7 @@ func waitState(t *testing.T, d *Daemon, state string, timeout time.Duration) Sta
 	}
 }
 
+// TestLiveControlsPreservePlayerAndPause checks controls do not replace the player.
 func TestLiveControlsPreservePlayerAndPause(t *testing.T) {
 	withConfigDir(t)
 	d := fakeDaemon(t)
@@ -116,6 +117,7 @@ func advanceReconnect(t *testing.T, d *Daemon) {
 	d.retryPlayback(generation)
 }
 
+// TestProlongedOutageRecoversWithPlaybackSettings checks reconnect backoff and restored controls.
 func TestProlongedOutageRecoversWithPlaybackSettings(t *testing.T) {
 	withConfigDir(t)
 	d := fakeDaemon(t)
@@ -175,6 +177,7 @@ func TestProlongedOutageRecoversWithPlaybackSettings(t *testing.T) {
 	}
 }
 
+// TestStopCancelsReconnectAndStaleEvents checks stopped playback cannot restart itself.
 func TestStopCancelsReconnectAndStaleEvents(t *testing.T) {
 	d := fakeDaemon(t)
 	wantReply(t, d.execute("play", "lofi-girl"), true, "loading")
@@ -195,6 +198,7 @@ func TestStopCancelsReconnectAndStaleEvents(t *testing.T) {
 	}
 }
 
+// TestSwitchStationAndSleepExpiryCancelReconnect checks replacement and timer cancellation.
 func TestSwitchStationAndSleepExpiryCancelReconnect(t *testing.T) {
 	for _, action := range []string{"switch", "sleep"} {
 		t.Run(action, func(t *testing.T) {
@@ -223,6 +227,7 @@ func TestSwitchStationAndSleepExpiryCancelReconnect(t *testing.T) {
 	}
 }
 
+// TestSleepTimerReplaceCancelAndExpire checks sleep timer ownership and deadlines.
 func TestSleepTimerReplaceCancelAndExpire(t *testing.T) {
 	d := fakeDaemon(t)
 	wantReply(t, d.execute("sleep", "-1m"), false, "positive duration")
@@ -249,6 +254,7 @@ func TestSleepTimerReplaceCancelAndExpire(t *testing.T) {
 	wantReply(t, d.execute("toggle", ""), true, "loading")
 }
 
+// TestStatusDisplaysLoadingFailureMuteAndSleep checks visible playback state details.
 func TestStatusDisplaysLoadingFailureMuteAndSleep(t *testing.T) {
 	out := strings.Join(statusFacts(&Status{State: "reconnecting", Station: "lofi-girl", Error: "unavailable", Retries: 2, RetryAt: time.Now().Add(2 * time.Second), Paused: true, Muted: true, Sleep: "45m0s"}), " ")
 	for _, want := range []string{"reconnecting", "retry 2 in 2s", "paused", "unavailable", "muted", "sleep 45m0s"} {

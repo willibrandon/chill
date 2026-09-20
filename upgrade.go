@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"time"
+
+	"github.com/willibrandon/chill/internal/podcast"
 
 	"golang.org/x/mod/semver"
 )
@@ -54,15 +57,31 @@ func daemonNeedsUpgrade(s Status, clientVersion string) (bool, error) {
 }
 
 type playbackSnapshot struct {
-	Station    *Station  `json:"station,omitempty"`
-	Volume     int       `json:"volume"`
-	Muted      bool      `json:"muted"`
-	Paused     bool      `json:"paused"`
+	// Queue preserves pending podcast episodes during daemon upgrades.
+	Queue []podcast.Episode `json:"queue,omitempty"`
+	// Episode preserves podcast metadata during a daemon upgrade.
+	Episode *podcast.Episode `json:"episode,omitempty"`
+	// Position is the episode playhead in seconds.
+	Position float64 `json:"position,omitempty"`
+	// Speed preserves the podcast playback rate.
+	Speed float64 `json:"speed,omitempty"`
+	// Station preserves the complete radio definition, including overrides.
+	Station *Station `json:"station,omitempty"`
+	// Volume is the restored output level from 0 to 100.
+	Volume int `json:"volume"`
+	// Muted preserves output mute during handoff.
+	Muted bool `json:"muted"`
+	// Paused prevents resumed playback from briefly becoming audible.
+	Paused bool `json:"paused"`
+	// SleepUntil preserves the absolute stop deadline.
 	SleepUntil time.Time `json:"sleep_until,omitzero"`
 }
 
 func snapshotPlayback(s Status, now time.Time) (playbackSnapshot, error) {
 	snapshot := playbackSnapshot{Volume: s.Volume, Muted: s.Muted, Paused: s.Paused, SleepUntil: s.SleepUntil}
+	if s.Episode != nil && s.State != "ended" && s.State != "idle" {
+		snapshot.Episode, snapshot.Position, snapshot.Speed = s.Episode, s.Position, s.Speed
+	}
 	if snapshot.SleepUntil.IsZero() && s.Sleep != "" {
 		remaining, err := time.ParseDuration(s.Sleep)
 		if err != nil {
@@ -105,8 +124,22 @@ func upgradeDaemon() error {
 	if err != nil {
 		return err
 	}
+	if s.Queued > 0 {
+		raw, err := unwrapReply(sendRawCommand("queue"))
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(raw), &snapshot.Queue); err != nil {
+			return err
+		}
+	}
 	if snapshot.Station != nil {
 		if err := checkRequirements(); err != nil {
+			return err
+		}
+	}
+	if snapshot.Episode != nil {
+		if err := checkPodcastRequirements(); err != nil {
 			return err
 		}
 	}
@@ -134,14 +167,35 @@ func (d *Daemon) restore(arg string) string {
 	if err := json.Unmarshal([]byte(arg), &snapshot); err != nil {
 		return fail("bad playback snapshot: " + err.Error())
 	}
+	if snapshot.Station != nil && snapshot.Episode != nil || snapshot.Position < 0 || snapshot.Position > 365*24*3600 || math.IsNaN(snapshot.Position) {
+		return fail("invalid playback snapshot")
+	}
 	d.cancelSleep()
 	d.kill()
 	d.volume = max(0, min(100, snapshot.Volume))
 	d.muted = snapshot.Muted
-	if snapshot.Station == nil || (!snapshot.SleepUntil.IsZero() && !snapshot.SleepUntil.After(time.Now())) {
+	if snapshot.Station == nil && snapshot.Episode == nil || (!snapshot.SleepUntil.IsZero() && !snapshot.SleepUntil.After(time.Now())) {
 		return ok("restored idle playback")
 	}
 	d.station, d.paused = snapshot.Station, snapshot.Paused
+	d.episodeQueue = snapshot.Queue
+	if snapshot.Episode != nil {
+		if !podcast.ValidURL(snapshot.Episode.URL) || !podcast.ValidURL(snapshot.Episode.FeedURL) {
+			return fail("invalid restored episode")
+		}
+		if _, err := d.podcastLibrary(); err != nil {
+			return fail(err.Error())
+		}
+		d.episode = snapshot.Episode
+		d.episodeOffset = time.Duration(max(0, snapshot.Position) * float64(time.Second))
+		d.episodeDuration = time.Duration(snapshot.Episode.Duration * float64(time.Second))
+		if snapshot.Speed >= 0.5 && snapshot.Speed <= 3 {
+			d.speed = snapshot.Speed
+		}
+		if err := d.startEpisodeCache(); err != nil {
+			return fail(err.Error())
+		}
+	}
 	if err := d.startPlayback(); err != nil {
 		d.state, d.lastError = "failed", err.Error()
 		return fail("restoring playback: " + err.Error())
@@ -153,6 +207,9 @@ func (d *Daemon) restore(arg string) string {
 		} else {
 			d.sleep(remaining.String())
 		}
+	}
+	if d.episode != nil {
+		d.scheduleProgress()
 	}
 	return ok("restored playback")
 }

@@ -17,3 +17,7 @@ REPL history. The pause before `status` gives playback a few seconds of uptime.
 
 The tape selects `./chill` on Linux/macOS, or `./chill.exe` when run from WSL
 with a Windows build.
+
+`vhs vhs/podcasts.tape` captures the podcast browser in `assets/podcasts.png`.
+It opens the Tech Life feed, subscribes, plays an episode briefly, then stops.
+It also requires ffprobe, which comes with FFmpeg.

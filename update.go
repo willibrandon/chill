@@ -27,15 +27,21 @@ const latestReleaseURL = "https://api.github.com/repos/willibrandon/chill/releas
 const maxUpdateSize = 64 << 20
 
 type releaseAsset struct {
+	// Name is the downloadable release filename.
 	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
+	// URL is the release asset download address.
+	URL string `json:"browser_download_url"`
 }
 
 type releaseInfo struct {
-	Tag        string         `json:"tag_name"`
-	Draft      bool           `json:"draft"`
-	Prerelease bool           `json:"prerelease"`
-	Assets     []releaseAsset `json:"assets"`
+	// Tag is the release's version tag.
+	Tag string `json:"tag_name"`
+	// Draft prevents installing an unpublished release.
+	Draft bool `json:"draft"`
+	// Prerelease prevents installing unstable releases by default.
+	Prerelease bool `json:"prerelease"`
+	// Assets lists binaries and checksums attached to the release.
+	Assets []releaseAsset `json:"assets"`
 }
 
 type releaseUpdater struct {

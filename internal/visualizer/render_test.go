@@ -10,6 +10,7 @@ import (
 	"github.com/willibrandon/chill/internal/audio"
 )
 
+// TestModesFitAndRenderWithoutMutation checks every mode's dimensions and read-only rendering.
 func TestModesFitAndRenderWithoutMutation(t *testing.T) {
 	var r Renderer
 	var f audio.Frame
@@ -58,6 +59,7 @@ func TestModesFitAndRenderWithoutMutation(t *testing.T) {
 	}
 }
 
+// TestSilenceDecayAndIndependentPeakHold checks stereo hold timing and silent displays.
 func TestSilenceDecayAndIndependentPeakHold(t *testing.T) {
 	var r Renderer
 	now := time.Now()

@@ -10,7 +10,7 @@ import (
 // that Go's default usage output cannot discover.
 func printCLIHelp() {
 	out := flag.CommandLine.Output()
-	fmt.Fprint(out, `chill - terminal lofi radio
+	fmt.Fprint(out, `chill - terminal radio and podcast player
 
 Usage:
   chill [options] [station]
@@ -19,6 +19,14 @@ Usage:
 With no arguments, chill plays your default station in the background.
 `)
 	printHelpSection(out, "Commands", [][2]string{
+		{"play [station]", "resume playback or play a station"},
+		{"pause / resume / toggle / stop", "control current playback"},
+		{"status [--json]", "show current playback"},
+		{"volume [level]", "report or change volume (0-100)"},
+		{"podcasts [command|feed-url]", "browse podcasts; --help lists all commands"},
+		{"seek <seconds>", "jump within a podcast (-30, +30)"},
+		{"speed [0.5-3]", "set podcast playback speed"},
+		{"next / prev", "next queued episode / previous episode"},
 		{"doctor [options]", "check dependencies, config, and daemon compatibility"},
 		{"add <name> <url> [description]", "save a custom station or override a built-in"},
 		{"remove <name>", "remove a custom station or restore a built-in"},
@@ -41,6 +49,8 @@ With no arguments, chill plays your default station in the background.
 	printHelpSection(out, "Examples", [][2]string{
 		{"chill chillhop", "play a station"},
 		{"chill -i", "open the interactive REPL"},
+		{"chill podcasts", "open the podcast browser"},
+		{"chill podcasts search history --json", "search for shows as JSON"},
 		{"chill --vol +5", "raise the volume"},
 		{"chill --sleep 45m", "stop playback in 45 minutes"},
 		{"chill --status --json", "show read-only, machine-readable status"},

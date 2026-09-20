@@ -30,9 +30,19 @@ type pcmPlayer struct {
 	watchDone chan struct{}
 	once      sync.Once
 	loaded    bool // commands are serialized by the daemon
+	offset    time.Duration
+	finite    bool
 }
 
 func startPCMPlayer(volume int, muted, paused bool) (player, error) {
+	return newPCMPlayer(volume, muted, paused, 0, false)
+}
+
+func startPCMPlayerAt(volume int, muted, paused bool, offset time.Duration) (player, error) {
+	return newPCMPlayer(volume, muted, paused, offset, true)
+}
+
+func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite bool) (player, error) {
 	read, write, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -41,7 +51,7 @@ func startPCMPlayer(volume int, muted, paused bool) (player, error) {
 		"--demuxer=rawaudio", "--demuxer-rawaudio-format=floatle",
 		"--demuxer-rawaudio-rate=48000", "--demuxer-rawaudio-channels=stereo",
 		"--cache=no", "--demuxer-readahead-secs=0", "--demuxer-max-bytes=16384",
-		"--audio-buffer=0.1", "--ytdl=no",
+		"--audio-buffer=0.1", "--ytdl=no", "--loop-file=no",
 	})
 	read.Close()
 	if err != nil {
@@ -50,6 +60,7 @@ func startPCMPlayer(volume int, muted, paused bool) (player, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &pcmPlayer{output: output, pipe: write, ctx: ctx, cancel: cancel,
+		offset: offset, finite: finite,
 		done: make(chan struct{}), ready: make(chan struct{}), event: make(chan playerEvent, 8), watchDone: make(chan struct{})}
 	go p.watch()
 	return p, nil
@@ -57,6 +68,9 @@ func startPCMPlayer(volume int, muted, paused bool) (player, error) {
 
 func (p *pcmPlayer) events() <-chan playerEvent { return p.event }
 func (p *pcmPlayer) audioFrame() audio.Frame    { return p.buffer.Snapshot() }
+func (p *pcmPlayer) position() time.Duration {
+	return p.offset + time.Duration(p.output.positionNS.Load())
+}
 
 // Raw-input mpv can announce file-loaded before the extractor or decoder has
 // produced audio. Playing is only true once both output and PCM are ready.
@@ -73,7 +87,7 @@ func (p *pcmPlayer) watch() {
 	for {
 		select {
 		case e := <-p.output.events():
-			if e.err != "" {
+			if e.err != "" || e.ended {
 				emit(e)
 				return
 			}
@@ -127,7 +141,9 @@ func (p *pcmPlayer) close() {
 }
 
 type resolvedAudio struct {
-	URL     string            `json:"url"`
+	// URL is the resolved media address consumed by FFmpeg.
+	URL string `json:"url"`
+	// Headers contains the extractor's required request headers.
 	Headers map[string]string `json:"http_headers"`
 }
 
@@ -194,7 +210,13 @@ func (p *pcmPlayer) decode(source string) error {
 	}
 	// Input pacing and small output buffers keep analysis close to audible
 	// playback even for local files, which otherwise decode as fast as possible.
-	args = append(args, "-re", "-i", resolved.URL, "-map", "0:a:0", "-vn", "-sn", "-dn",
+	if !p.finite {
+		args = append(args, "-re")
+	}
+	if p.offset > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%.6f", p.offset.Seconds()))
+	}
+	args = append(args, "-i", resolved.URL, "-map", "0:a:0", "-vn", "-sn", "-dn",
 		"-ac", "2", "-ar", "48000", "-c:a", "pcm_f32le", "-f", "f32le", "pipe:1")
 	cmd := exec.Command("ffmpeg", args...)
 	var diagnostics tailBuffer
