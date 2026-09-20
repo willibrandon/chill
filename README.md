@@ -23,8 +23,6 @@ scoop install chill
 Both packages install [mpv](https://mpv.io/),
 [yt-dlp](https://github.com/yt-dlp/yt-dlp), and Deno for YouTube extraction.
 Update them with `brew upgrade willibrandon/tap/chill` or `scoop update chill`.
-Package definitions currently target the published v0.5.0 release; the diagnostics
-and JSON commands below are available in source and the next release.
 
 ### Go or release binary
 
@@ -67,8 +65,6 @@ the latest release for your platform, verifies its checksum, and updates the
 running daemon while preserving playback settings.
 For a Homebrew or Scoop installation, `chill update` instead tells you which
 package-manager command to use; it does not replace a package-owned executable.
-This guard is available in source and the next release; use the package manager
-when running v0.5.0 as well.
 
 Make sure your Go bin directory is in your `PATH`:
 - macOS/Linux: `export PATH="$HOME/go/bin:$PATH"`
