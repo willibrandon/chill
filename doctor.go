@@ -39,12 +39,21 @@ func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
 }
 
 type doctorReport struct {
-	out    io.Writer
-	failed bool
+	out      io.Writer
+	passed   int
+	warnings int
+	failed   int
 }
 
 func (r *doctorReport) check(level, name, message string) {
-	r.failed = r.failed || level == "FAIL"
+	switch level {
+	case "OK":
+		r.passed++
+	case "WARN":
+		r.warnings++
+	case "FAIL":
+		r.failed++
+	}
 	fmt.Fprintf(r.out, "[%s] %s: %s\n", level, name, message)
 }
 
@@ -169,7 +178,11 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 			r.check(level, station.Name, fmt.Sprintf("%s (%s; stream resolves)", info.Title, info.LiveStatus))
 		}
 	}
-	if r.failed {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Doctor complete. Passed: %d, warnings: %d, failed: %d.\n", r.passed, r.warnings, r.failed)
+	if r.failed > 0 {
 		return fmt.Errorf("doctor found problems; see the checks above")
 	}
 	return nil
