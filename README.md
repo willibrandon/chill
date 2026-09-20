@@ -222,9 +222,6 @@ not oversampled inter-sample true-peak measurements. Playback/output buffering
 can introduce a small visual lead. Paused, disconnected, and stale streams clear
 the display. Help and terminals too small for a panel suspend the subscription.
 
-See [the visualizer architecture](docs/visualizers.md) for extension points and
-lifecycle details.
-
 ## Foreground Mode
 
 Use `--fg` to run in the terminal with mpv controls:
