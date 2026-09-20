@@ -82,11 +82,14 @@ type tui struct {
 	histPos int    // position in history while browsing, len(lines) when not
 	draft   string // what was typed before browsing history
 
-	status  *Status  // last known daemon state
-	running bool     // a command is in flight
-	pending []string // submitted while another command was running
-	active  string   // name of the command in flight
-	spinner spinner.Model
+	status         *Status  // last known daemon state
+	running        bool     // a command is in flight
+	pending        []string // submitted while another command was running
+	active         string   // name of the command in flight
+	spinner        spinner.Model
+	activeLine     int // submitted command's transcript line, or -1
+	activeRow      int // row where its spinner is drawn, or -1
+	activeExtraRow bool
 
 	help     bool           // the help screen is showing
 	helpView viewport.Model // scrolls the help screen
@@ -186,6 +189,9 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		t.spinner, cmd = t.spinner.Update(msg)
+		if cmd != nil {
+			t.redraw()
+		}
 		return cmd
 
 	case statusMsg:
@@ -201,6 +207,12 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 	case resultMsg:
 		t.running = false
 		t.active = ""
+		t.activeLine, t.activeRow = -1, -1
+		if t.activeExtraRow {
+			t.wrap()
+		} else {
+			t.redraw()
+		}
 		// Diagnostic commands can return useful findings alongside a failure.
 		if msg.out != "" {
 			for _, line := range strings.Split(msg.out, "\n") {
@@ -416,6 +428,7 @@ func (t *tui) start(line string) tea.Cmd {
 	t.active = strings.ToLower(strings.Fields(line)[0])
 	// A fresh ID keeps late ticks from a previous command out of this animation.
 	t.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	t.activeLine = len(t.lines)
 	t.print(t.promptLabel() + highlight(line))
 	return tea.Batch(t.spinner.Tick, run(line))
 }
@@ -450,13 +463,28 @@ func isCommand(word string) bool {
 func (t *tui) print(line string) {
 	t.lines = append(t.lines, line)
 	if len(t.lines) > maxTranscript {
+		t.activeLine = max(-1, t.activeLine-(len(t.lines)-maxTranscript))
 		t.lines = t.lines[len(t.lines)-maxTranscript:]
 		t.wrap()
 	} else {
-		t.rows = append(t.rows, t.wrapped(line)...)
+		t.appendRows(len(t.lines)-1, line)
 		t.redraw()
 	}
 	t.viewport.GotoBottom()
+}
+
+// appendRows reserves room for the spinner without putting animation frames in
+// the transcript or copied text.
+func (t *tui) appendRows(index int, line string) {
+	rows := t.wrapped(line)
+	if t.running && index == t.activeLine {
+		t.activeExtraRow = t.width > 1 && lipgloss.Width(rows[len(rows)-1])+2 > t.width-1
+		if t.activeExtraRow {
+			rows = append(rows, "")
+		}
+		t.activeRow = len(t.rows) + len(rows) - 1
+	}
+	t.rows = append(t.rows, rows...)
 }
 
 // wrapped splits a transcript line into rows that fit beside the scrollbar.
@@ -471,8 +499,9 @@ func (t *tui) wrapped(line string) []string {
 // lines were dropped. Rows move, so what was selected no longer holds.
 func (t *tui) wrap() {
 	t.rows = nil
-	for _, line := range t.lines {
-		t.rows = append(t.rows, t.wrapped(line)...)
+	t.activeRow, t.activeExtraRow = -1, false
+	for i, line := range t.lines {
+		t.appendRows(i, line)
 	}
 	t.sel, t.flashing = selection{}, false
 	t.redraw()
@@ -481,6 +510,7 @@ func (t *tui) wrap() {
 // clear empties the transcript, leaving the banner.
 func (t *tui) clear() {
 	t.lines, t.rows = nil, nil
+	t.activeLine, t.activeRow, t.activeExtraRow = -1, -1, false
 	t.sel, t.flashing = selection{}, false
 	t.print(styleDim.Render(banner))
 }

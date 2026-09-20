@@ -100,6 +100,66 @@ func TestTUIQueuedCommandGetsFreshSpinner(t *testing.T) {
 	}
 }
 
+func TestTUISpinnerAppearsBesideSubmittedCommand(t *testing.T) {
+	withConfigDir(t)
+	model := newTUI()
+	model.width, model.height = 100, 30
+	model.fit()
+	model.setInput("doctor --stations")
+	model.submit()
+	echo := "chill> doctor --stations"
+	frame := model.spinner.View()
+	if !strings.Contains(ansi.Strip(model.viewport.View()), echo+" "+frame) {
+		t.Fatal("submitted command has no inline spinner")
+	}
+	model.sel = selection{active: true, lines: true,
+		anchor: point{model.activeRow, 0}, cursor: point{model.activeRow, len(echo) - 1}}
+	model.update(model.spinner.Tick())
+	if model.spinner.View() == frame || !strings.Contains(ansi.Strip(model.viewport.View()), echo+" "+model.spinner.View()) {
+		t.Fatal("inline spinner did not animate")
+	}
+	if !model.sel.active || model.selectedText() != echo {
+		t.Fatal("animation changed the selection or copied text")
+	}
+	for _, line := range append(append([]string(nil), model.lines...), model.rows...) {
+		if strings.ContainsAny(line, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+			t.Fatal("animation frames were stored in the transcript")
+		}
+	}
+	model.update(resultMsg{out: "done"})
+	if strings.ContainsAny(ansi.Strip(model.viewport.View()), "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+		t.Fatal("inline spinner remained after completion")
+	}
+}
+
+func TestTUIInlineSpinnerWrappingAndClear(t *testing.T) {
+	withConfigDir(t)
+	model := newTUI()
+	model.width, model.height = len("chill> doctor --stations")+1, 30
+	model.fit()
+	model.setInput("doctor --stations")
+	model.submit()
+	if !model.activeExtraRow || model.rows[model.activeRow] != "" {
+		t.Fatal("spinner did not wrap when the command filled its row")
+	}
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if model.activeExtraRow || !strings.Contains(ansi.Strip(model.viewport.View()), "chill> doctor --stations "+model.spinner.View()) {
+		t.Fatal("resizing did not put the spinner back beside the command")
+	}
+	model.Update(tea.WindowSizeMsg{Width: len("chill> doctor --stations") + 1, Height: 30})
+	rows := len(model.rows)
+	model.update(resultMsg{})
+	if len(model.rows) != rows-1 {
+		t.Fatal("completion left the temporary spinner row behind")
+	}
+	model.start("doctor")
+	model.clear()
+	model.update(model.spinner.Tick())
+	if model.activeRow != -1 || strings.ContainsAny(ansi.Strip(model.viewport.View()), "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+		t.Fatal("clearing the transcript moved the spinner to an unrelated line")
+	}
+}
+
 func TestTUIHelpIncludesDoctor(t *testing.T) {
 	if !isCommand("doctor") || !strings.Contains(replHelp(), "doctor") {
 		t.Fatal("doctor is missing from the REPL command registry")

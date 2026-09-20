@@ -101,7 +101,16 @@ func (t *tui) decorated() []string {
 
 // redraw hands the transcript to the viewport again, keeping its position.
 func (t *tui) redraw() {
-	t.viewport.SetContentLines(t.decorated())
+	rows := t.decorated()
+	if t.running && t.activeRow >= 0 && t.activeRow < len(rows) {
+		rows = append([]string(nil), rows...)
+		gap := " "
+		if rows[t.activeRow] == "" {
+			gap = ""
+		}
+		rows[t.activeRow] += gap + styleCommand.Render(t.spinner.View())
+	}
+	t.viewport.SetContentLines(rows)
 }
 
 // selectedText returns the text of the selection. Whole lines lose the guide
