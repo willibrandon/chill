@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: go test ./...
 
-      - name: Test workflow scripts
+      - name: Test package release updater
         run: python -m unittest discover -s .github/scripts -p 'test_*.py'
 
       - name: Install mpv (Ubuntu)
