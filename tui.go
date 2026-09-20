@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -84,6 +85,8 @@ type tui struct {
 	status  *Status  // last known daemon state
 	running bool     // a command is in flight
 	pending []string // submitted while another command was running
+	active  string   // name of the command in flight
+	spinner spinner.Model
 
 	help     bool           // the help screen is showing
 	helpView viewport.Model // scrolls the help screen
@@ -177,6 +180,14 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
+	case spinner.TickMsg:
+		if !t.running {
+			return nil
+		}
+		var cmd tea.Cmd
+		t.spinner, cmd = t.spinner.Update(msg)
+		return cmd
+
 	case statusMsg:
 		if msg.status != nil && msg.status.Error != "" && (t.status == nil || t.status.Error != msg.status.Error || t.status.State != msg.status.State) {
 			t.print(styleError.Render("  playback: ") + strings.Join(statusFacts(msg.status), " │ "))
@@ -189,6 +200,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 
 	case resultMsg:
 		t.running = false
+		t.active = ""
 		// Diagnostic commands can return useful findings alongside a failure.
 		if msg.out != "" {
 			for _, line := range strings.Split(msg.out, "\n") {
@@ -401,8 +413,11 @@ func (t *tui) submit() tea.Cmd {
 // start echoes a line into the transcript and runs it.
 func (t *tui) start(line string) tea.Cmd {
 	t.running = true
+	t.active = strings.ToLower(strings.Fields(line)[0])
+	// A fresh ID keeps late ticks from a previous command out of this animation.
+	t.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	t.print(t.promptLabel() + highlight(line))
-	return run(line)
+	return tea.Batch(t.spinner.Tick, run(line))
 }
 
 // highlight colors a submitted line for the transcript.
@@ -699,6 +714,9 @@ func column(s string, width int) string {
 // statusBar renders the bottom line: playback on the left, keys on the right.
 func (t *tui) statusBar() string {
 	facts := statusFacts(t.status)
+	if t.running {
+		facts = append([]string{t.spinner.View() + " Running " + t.active + "..."}, facts...)
+	}
 
 	hints := []string{"F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
@@ -707,7 +725,6 @@ func (t *tui) statusBar() string {
 	case t.sel.active:
 		hints = []string{"y yank", "Esc cancel"}
 	case t.running:
-		facts = append(facts, "working")
 		hints = []string{"F1 help", "Ctrl+Q quit"}
 	case t.paletteOpen() && t.navigated:
 		hints = []string{"F1 help", "Esc dismiss", "Ctrl+Q quit", "Enter accepts"}
