@@ -12,7 +12,11 @@ import (
 // A kernel-backed lock is released even if a client crashes. The file stays in
 // place so waiting clients always lock the same inode/Windows file object.
 func lockDaemon() (func(), error) {
-	f, err := os.OpenFile(socketPath()+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	return lockFile(socketPath() + ".lock")
+}
+
+func lockFile(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +32,7 @@ func lockDaemon() (func(), error) {
 		}
 		if time.Now().After(deadline) {
 			f.Close()
-			return nil, fmt.Errorf("timed out waiting for another chill command")
+			return nil, fmt.Errorf("timed out waiting for another chill command (%s)", path)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -13,6 +13,7 @@
 //	chill --status     # show what's playing
 //	chill --stop       # stop playback
 //	chill add n url    # save your own station
+//	chill update       # install the latest release
 package main
 
 import (
@@ -104,6 +105,8 @@ func main() {
 	fg := flag.Bool("fg", false, "run in foreground (no daemon)")
 	version := flag.Bool("version", false, "show version")
 	mute := flag.Bool("mute", false, "toggle mute")
+	update := flag.Bool("update", false, "install the latest release")
+	upgrade := flag.Bool("upgrade", false, "alias for -update")
 
 	// options
 	station := flag.String("station", "", "station to play")
@@ -111,6 +114,7 @@ func main() {
 
 	flag.Parse()
 	enableANSI()
+	cleanupUpdateBackups()
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", configErr)
 	}
@@ -122,6 +126,11 @@ func main() {
 		runRepl()
 	case *version:
 		fmt.Println("chill " + buildVersion())
+	case *update || *upgrade || flag.NArg() > 0 && (flag.Arg(0) == "update" || flag.Arg(0) == "upgrade"):
+		if (*update || *upgrade) && flag.NArg() != 0 || !*update && !*upgrade && flag.NArg() != 1 {
+			printResult("", fmt.Errorf("usage: chill update (or chill -update)"))
+		}
+		printResult(updateChill())
 	case flag.NArg() > 0 && flag.Arg(0) == "add":
 		addStation(flag.Args()[1:])
 	case flag.NArg() > 0 && flag.Arg(0) == "remove":
@@ -213,6 +222,7 @@ func printStations() {
 	fmt.Printf("    %schill default n%s    %sset the default station%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --sleep 45m%s  %sstop after 45 minutes (off to cancel)%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --fg%s         %srun in foreground%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill update%s       %sinstall the latest release%s\n", cyan, reset, dim, reset)
 	fmt.Println()
 }
 

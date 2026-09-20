@@ -31,6 +31,16 @@ go install github.com/willibrandon/chill@latest
 
 Or grab a binary for your platform from the [releases page](https://github.com/willibrandon/chill/releases) and put it somewhere in your `PATH`.
 
+To update an installed copy:
+
+```bash
+chill update
+```
+
+`chill -update`, `chill --update`, and `chill upgrade` work too. This downloads
+the latest release for your platform, verifies its checksum, and updates the
+running daemon while preserving playback settings.
+
 Make sure your Go bin directory is in your `PATH`:
 - macOS/Linux: `export PATH="$HOME/go/bin:$PATH"`
 - Windows: Add `%USERPROFILE%\go\bin` to your PATH
@@ -54,6 +64,7 @@ chill default n      # choose the station played by chill
 chill --sleep 45m    # stop playback after 45 minutes
 chill --sleep off    # cancel the sleep timer
 chill --version      # show version
+chill update         # install the latest release
 chill --fg           # run in foreground (no daemon)
 ```
 
