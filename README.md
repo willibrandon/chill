@@ -88,7 +88,21 @@ Add any YouTube stream with `chill add <name> <url> [description]`, or edit
 ```json
 {
   "stations": [
-    {"name": "synthwave", "url": "https://www.youtube.com/watch?v=4xDzrJKXOOY", "desc": "Synthwave Radio"}
+    {
+      "name": "synthwave",
+      "url": "https://www.youtube.com/watch?v=4xDzrJKXOOY",
+      "desc": "Synthwave Radio - retro electronic beats"
+    },
+    {
+      "name": "jazz",
+      "url": "https://www.youtube.com/watch?v=HuFYqnbVbzY",
+      "desc": "Jazz Cafe - smooth jazz for work"
+    },
+    {
+      "name": "rain",
+      "url": "https://www.youtube.com/watch?v=mPZkdNFkNps",
+      "desc": "Rain on a window - for deep focus"
+    }
   ]
 }
 ```
