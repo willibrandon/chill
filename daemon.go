@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -19,12 +18,13 @@ import (
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
 type Daemon struct {
-	mu        sync.Mutex   // protects all fields
-	cmd       *exec.Cmd    // mpv process
-	station   *Station     // currently playing station
-	paused    bool         // whether playback is paused
-	startedAt time.Time    // when current station started
-	listener  net.Listener // Unix socket listener
+	mu        sync.Mutex    // protects all fields
+	tree      *processTree  // mpv and any processes it spawned
+	exited    chan struct{} // closed once mpv has exited
+	station   *Station      // currently playing station
+	paused    bool          // whether playback is paused
+	startedAt time.Time     // when current station started
+	listener  net.Listener  // Unix socket listener
 }
 
 // Status represents the current playback state, serialized as JSON for clients.
@@ -127,34 +127,45 @@ func (d *Daemon) play(name string) string {
 	}
 
 	d.kill()
-	d.station = station
-	d.paused = false
-	d.startedAt = time.Now()
 
-	d.cmd = exec.Command("mpv",
+	// Stdout and stderr stay nil so they go to the null device. An io.Writer
+	// would make exec use pipes, and Wait would then block until every
+	// process that inherited them has exited.
+	cmd := exec.Command("mpv",
 		"--no-video",
 		"--really-quiet",
 		station.URL,
 	)
-	d.cmd.Stdout = io.Discard
-	d.cmd.Stderr = io.Discard
 
-	if err := d.cmd.Start(); err != nil {
+	tree, err := startInTree(cmd)
+	if err != nil {
 		return "failed to start: " + err.Error()
 	}
 
+	exited := make(chan struct{})
 	go func() {
-		d.cmd.Wait()
+		cmd.Wait()
+		close(exited)
 	}()
+
+	d.tree = tree
+	d.exited = exited
+	d.station = station
+	d.paused = false
+	d.startedAt = time.Now()
 
 	return "playing: " + station.Desc
 }
 
 func (d *Daemon) pause() string {
-	if d.cmd == nil || d.cmd.Process == nil {
+	if d.tree == nil {
 		return "nothing playing"
 	}
-	if err := pauseProcess(d.cmd.Process); err != nil {
+	if d.paused {
+		// suspending twice on Windows would take two resumes to undo
+		return "paused"
+	}
+	if err := d.tree.pause(); err != nil {
 		return err.Error()
 	}
 	d.paused = true
@@ -162,10 +173,10 @@ func (d *Daemon) pause() string {
 }
 
 func (d *Daemon) resume() string {
-	if d.cmd == nil || d.cmd.Process == nil {
+	if d.tree == nil {
 		return "nothing playing"
 	}
-	if err := resumeProcess(d.cmd.Process); err != nil {
+	if err := d.tree.resume(); err != nil {
 		return err.Error()
 	}
 	d.paused = false
@@ -193,17 +204,17 @@ func (d *Daemon) skip() string {
 }
 
 func (d *Daemon) kill() {
-	if d.cmd != nil && d.cmd.Process != nil {
-		d.cmd.Process.Kill()
-		d.cmd.Wait()
+	if d.tree != nil {
+		d.tree.kill()
+		<-d.exited
 	}
-	d.cmd = nil
+	d.tree = nil
 	d.station = nil
 }
 
 func (d *Daemon) status() string {
 	s := Status{
-		Playing: d.cmd != nil && d.cmd.Process != nil && !d.paused,
+		Playing: d.tree != nil && !d.paused,
 		Paused:  d.paused,
 	}
 

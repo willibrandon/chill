@@ -84,4 +84,8 @@ jobs:
           .\chill.exe --status
           # Stop playback
           .\chill.exe --stop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # mpv runs behind a launcher on Windows, make sure nothing was left playing
+          Start-Sleep -Seconds 1
+          if (Get-Process mpv -ErrorAction SilentlyContinue) { throw "mpv still running after --stop" }
         shell: pwsh

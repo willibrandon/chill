@@ -6,7 +6,9 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -164,9 +166,13 @@ func clientStop() {
 	}
 
 	_, err := sendCommand("stop")
-	if err != nil {
-		// daemon exited, that's fine
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		// daemon is still there but never answered, so nothing was stopped
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
+	// any other error means the daemon exited, that's fine
 
 	fmt.Println(dim + "~ stay chill ~" + reset)
 }
