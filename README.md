@@ -8,6 +8,8 @@ Terminal lofi radio. Streams the best 24/7 lofi beats from YouTube.
         ╰──────────────────╯
 ```
 
+![chill playing chillhop, with suggestions open in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
+
 ## Install
 
 Requires [mpv](https://mpv.io/) and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
@@ -83,21 +85,7 @@ This means:
 
 ## Interactive Mode
 
-`chill -i` opens a fullscreen REPL that suggests commands and stations as you type:
-
-```
-chill  type a station or a command, tab completes.  help for more
-chill> play chillhop
-  ┊ ♪ playing: Chillhop Radio - jazzy & lofi hip hop
-
-────────────────────────────────────────────────────────────────────────
-┌────────────────────────────── commands ──────────────────────────────┐
-│ ❯ pause  pause playback                                              │
-│   play   play a station                                              │
-└──────────────────────────────────────────────────────────────────────┘
-chill[chillhop]> pause
-playing │ chillhop │ 3m12s      F1 help │ Tab complete │ Ctrl+Q quit
-```
+`chill -i` opens a fullscreen REPL that suggests commands and stations as you type, shown above.
 
 Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
 
