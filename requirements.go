@@ -49,15 +49,18 @@ func installCommands(programs []string) []string {
 		return []string{"brew install " + strings.Join(programs, " ")}
 	}
 
-	var cmds []string
+	// pip refuses to install system-wide on Debian and Ubuntu, and their own
+	// yt-dlp package goes stale, so yt-dlp comes through pipx
+	var apt, cmds []string
 	for _, p := range programs {
 		if p == "yt-dlp" {
-			cmds = append(cmds, "pip install yt-dlp")
+			apt = append(apt, "pipx")
+			cmds = append(cmds, "pipx install yt-dlp")
 		} else {
-			cmds = append(cmds, "sudo apt install "+p)
+			apt = append(apt, p)
 		}
 	}
-	return cmds
+	return append([]string{"sudo apt install " + strings.Join(apt, " ")}, cmds...)
 }
 
 // checkRequirements returns a *requirementsError if mpv or yt-dlp is missing.
