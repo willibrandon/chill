@@ -2,12 +2,6 @@
 
 Terminal lofi radio. Streams the best 24/7 lofi beats from YouTube.
 
-```
-        ╭──────────────────╮
-        │   ░▒▓ chill ▓▒░  │
-        ╰──────────────────╯
-```
-
 ![chill playing chillhop, with suggestions open in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
 
 ## Install
