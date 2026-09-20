@@ -20,12 +20,16 @@ type replCommand struct {
 // replCommands contains the available REPL commands.
 var replCommands = []replCommand{
 	{"play", "[station]", "play a station"},
+	{"vol", "[level]", "set volume (0-100, +5, -10, up, down)"},
+	{"mute", "", "toggle mute"},
 	{"skip", "", "skip to random station"},
 	{"pause", "", "pause playback"},
 	{"resume", "", "resume playback"},
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
 	{"list", "", "list all stations"},
+	{"add", "<name> <url> [desc]", "save a station to the config"},
+	{"reload", "", "reload stations from the config"},
 	{"stop", "", "stop playback"},
 	{"clear", "", "clear the screen"},
 	{"help", "", "show this help"},
@@ -66,6 +70,15 @@ func suggest(input string) []suggestion {
 			prefix = words[1]
 		}
 		candidates = stationSuggestions()
+
+	case strings.EqualFold(words[0], "vol") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		candidates = []suggestion{
+			{text: "up", desc: "a notch louder"},
+			{text: "down", desc: "a notch quieter"},
+		}
 	}
 
 	var matches []suggestion
@@ -103,15 +116,17 @@ func acceptSuggestion(input string, s suggestion) string {
 // execute runs one line of REPL input by parsing the command and delegating
 // to the daemon. It returns what to show for it.
 func execute(input string) (string, error) {
+	input = strings.TrimSpace(input)
 	parts := strings.Fields(input)
 	if len(parts) == 0 {
 		return "", nil
 	}
 
+	// the argument keeps its original case and spacing, for descriptions
 	cmd := strings.ToLower(parts[0])
 	arg := ""
-	if len(parts) > 1 {
-		arg = parts[1]
+	if i := strings.IndexByte(input, ' '); i >= 0 {
+		arg = strings.TrimSpace(input[i+1:])
 	}
 
 	var out string
@@ -126,6 +141,12 @@ func execute(input string) (string, error) {
 			return "", fmt.Errorf("unknown station %s, try list", arg)
 		}
 		out, err = clientPlay(arg)
+
+	case "vol", "volume":
+		out, err = clientVolume(arg)
+
+	case "mute":
+		out, err = clientMute()
 
 	case "skip":
 		out, err = clientSkip()
@@ -144,6 +165,30 @@ func execute(input string) (string, error) {
 
 	case "list":
 		out = stationList()
+
+	case "add":
+		if len(parts) < 3 {
+			return "", fmt.Errorf("usage: add <name> <url> [description...]")
+		}
+		var addErr error
+		out, addErr = saveStation(parts[1:])
+		if addErr != nil {
+			return "", addErr
+		}
+		// this process has its own copy of the station list too
+		configErr = loadUserStations()
+
+	case "reload":
+		// the REPL and the daemon each read the config, so both do
+		if err := loadUserStations(); err != nil {
+			return "", err
+		}
+		configErr = nil
+		if isDaemonRunning() {
+			out, err = ask("reload")
+		} else {
+			out = fmt.Sprintf("reloaded, %d stations", len(stations))
+		}
 
 	case "stop":
 		out, err = clientStop()

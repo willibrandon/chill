@@ -11,12 +11,12 @@ import (
 )
 
 var (
-	kernel32              = windows.NewLazySystemDLL("kernel32.dll")
-	procSuspendThread     = kernel32.NewProc("SuspendThread")
-	procResumeThread      = kernel32.NewProc("ResumeThread")
-	procCreateToolhelp32  = kernel32.NewProc("CreateToolhelp32Snapshot")
-	procThread32First     = kernel32.NewProc("Thread32First")
-	procThread32Next      = kernel32.NewProc("Thread32Next")
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
+	procSuspendThread    = kernel32.NewProc("SuspendThread")
+	procResumeThread     = kernel32.NewProc("ResumeThread")
+	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procThread32First    = kernel32.NewProc("Thread32First")
+	procThread32Next     = kernel32.NewProc("Thread32Next")
 )
 
 const (

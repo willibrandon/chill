@@ -700,9 +700,9 @@ func (t *tui) statusBar() string {
 	case t.status.Station == "":
 		facts = []string{"idle"}
 	case t.status.Paused:
-		facts = []string{"paused", t.status.Station, t.status.Uptime}
+		facts = []string{"paused", t.status.Station, t.status.Uptime, fmt.Sprintf("vol %d", t.status.Volume)}
 	default:
-		facts = []string{"playing", t.status.Station, t.status.Uptime}
+		facts = []string{"playing", t.status.Station, t.status.Uptime, fmt.Sprintf("vol %d", t.status.Volume)}
 	}
 
 	hints := []string{"F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}

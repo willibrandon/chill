@@ -40,6 +40,24 @@ func sendCommand(cmd string) (string, error) {
 	return strings.TrimSpace(response), nil
 }
 
+// ask sends a command and unwraps the reply: the message for success,
+// an error carrying the daemon's reason otherwise.
+func ask(cmd string) (string, error) {
+	raw, err := sendCommand(cmd)
+	if err != nil {
+		return "", err
+	}
+
+	var r reply
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return "", fmt.Errorf("daemon is an older chill, restart it: %w", err)
+	}
+	if !r.OK {
+		return "", errors.New(r.Msg)
+	}
+	return r.Msg, nil
+}
+
 // ensureDaemon starts the daemon if it's not already running.
 // It waits up to 2 seconds for the daemon to become ready.
 func ensureDaemon() error {
@@ -83,7 +101,7 @@ func clientPlay(station string) (string, error) {
 		cmd += " " + station
 	}
 
-	resp, err := sendCommand(cmd)
+	resp, err := ask(cmd)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +148,7 @@ func clientStatus() (string, error) {
 		state = dim + "⏸" + reset
 	}
 
-	return fmt.Sprintf("%s %s%s%s\n  %s%s │ %s%s", state, pink, s.Desc, reset, dim, s.Station, s.Uptime, reset), nil
+	return fmt.Sprintf("%s %s%s%s\n  %s%s │ %s │ vol %d%s", state, pink, s.Desc, reset, dim, s.Station, s.Uptime, s.Volume, reset), nil
 }
 
 // clientToggle pauses if playing, resumes if paused, or starts playing if stopped.
@@ -139,7 +157,7 @@ func clientToggle() (string, error) {
 		return clientPlay("lofi-girl")
 	}
 
-	resp, err := sendCommand("toggle")
+	resp, err := ask("toggle")
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +174,7 @@ func clientPause() (string, error) {
 		return dim + "not running" + reset, nil
 	}
 
-	resp, err := sendCommand("pause")
+	resp, err := ask("pause")
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +188,7 @@ func clientResume() (string, error) {
 		return dim + "not running" + reset, nil
 	}
 
-	resp, err := sendCommand("resume")
+	resp, err := ask("resume")
 	if err != nil {
 		return "", err
 	}
@@ -187,12 +205,44 @@ func clientSkip() (string, error) {
 		return "", err
 	}
 
-	resp, err := sendCommand("skip")
+	resp, err := ask("skip")
 	if err != nil {
 		return "", err
 	}
 
 	return pink + "♪ " + resp + reset, nil
+}
+
+// clientVolume sets or reports the volume. arg is a number, a step like
+// "+5", "up", "down", or empty to report.
+func clientVolume(arg string) (string, error) {
+	if !isDaemonRunning() {
+		return dim + "not running" + reset, nil
+	}
+
+	cmd := "vol"
+	if arg != "" {
+		cmd += " " + arg
+	}
+
+	resp, err := ask(cmd)
+	if err != nil {
+		return "", err
+	}
+	return cyan + "♫ " + resp + reset, nil
+}
+
+// clientMute toggles the volume between 0 and the default.
+func clientMute() (string, error) {
+	if !isDaemonRunning() {
+		return dim + "not running" + reset, nil
+	}
+
+	resp, err := ask("mute")
+	if err != nil {
+		return "", err
+	}
+	return cyan + "♫ " + resp + reset, nil
 }
 
 // clientStop stops playback and terminates the daemon.

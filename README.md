@@ -43,9 +43,12 @@ chill chillhop       # play specific station
 chill -i             # interactive mode (repl)
 chill --skip         # skip to random station
 chill --toggle       # pause/resume
+chill --vol 60       # set volume (also +5, -10, up, down)
+chill --mute         # toggle mute
 chill --status       # show what's playing
 chill --stop         # stop playback
 chill --list         # show all stations
+chill add n url desc # save your own station
 chill --version      # show version
 chill --fg           # run in foreground (no daemon)
 ```
@@ -77,11 +80,27 @@ This means:
 | `sleep` | Lofi - beats to sleep/relax to |
 | `study` | Lofi - beats to study/relax to |
 
+### Your own stations
+
+Add any YouTube stream with `chill add <name> <url> [description]`, or edit
+`~/.config/chill/stations.json` (`%AppData%\chill\stations.json` on Windows):
+
+```json
+{
+  "stations": [
+    {"name": "synthwave", "url": "https://www.youtube.com/watch?v=4xDzrJKXOOY", "desc": "Synthwave Radio"}
+  ]
+}
+```
+
+A station with the name of a built-in overrides it. The running daemon picks
+up edits with `chill -i` then `reload`, or it loads the file when it starts.
+
 ## Interactive Mode
 
 `chill -i` opens a fullscreen REPL that suggests commands and stations as you type, shown above.
 
-Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+Commands: `play`, `vol`, `mute`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `add`, `reload`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
 
 | Key | |
 |-----|---|

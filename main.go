@@ -13,6 +13,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -61,9 +63,9 @@ var vibes = []string{
 
 // Station represents a lofi radio stream with a name, YouTube URL, and description.
 type Station struct {
-	Name string // short identifier (e.g., "lofi-girl")
-	URL  string // YouTube video/stream URL
-	Desc string // human-readable description
+	Name string `json:"name"` // short identifier (e.g., "lofi-girl")
+	URL  string `json:"url"`  // YouTube video/stream URL
+	Desc string `json:"desc"` // human-readable description
 }
 
 // stations contains the available 24/7 lofi radio streams.
@@ -78,8 +80,12 @@ var stations = []Station{
 	{"study", "https://www.youtube.com/watch?v=7NOSDKb0HlU", "Lofi - beats to study/relax to"},
 }
 
+// configErr is why the stations file did not load, reported on the way out.
+var configErr error
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
+	configErr = loadUserStations()
 }
 
 func randInt(n int) int {
@@ -97,12 +103,17 @@ func main() {
 	stop := flag.Bool("stop", false, "stop playback")
 	fg := flag.Bool("fg", false, "run in foreground (no daemon)")
 	version := flag.Bool("version", false, "show version")
+	mute := flag.Bool("mute", false, "toggle mute")
 
 	// options
 	station := flag.String("station", "", "station to play")
+	vol := flag.String("vol", "", "set volume (0-100, +5, -10, up, down)")
 
 	flag.Parse()
 	enableANSI()
+	if configErr != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", configErr)
+	}
 
 	switch {
 	case *daemon:
@@ -111,6 +122,8 @@ func main() {
 		runRepl()
 	case *version:
 		fmt.Println("chill " + buildVersion())
+	case flag.NArg() > 0 && flag.Arg(0) == "add":
+		addStation(flag.Args()[1:])
 	case *list:
 		printStations()
 	case *status:
@@ -121,6 +134,10 @@ func main() {
 		printResult(clientSkip())
 	case *stop:
 		printResult(clientStop())
+	case *vol != "":
+		printResult(clientVolume(*vol))
+	case *mute:
+		printResult(clientMute())
 	case *fg:
 		// foreground mode (original behavior)
 		s := *station
@@ -184,8 +201,11 @@ func printStations() {
 	fmt.Printf("    %schill -i%s           %sinteractive mode (repl)%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --skip%s       %sskip to random station%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --toggle%s     %spause/resume%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --vol 60%s     %sset volume (or +5, -10, up, down)%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --mute%s       %stoggle mute%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --status%s     %sshow what's playing%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --stop%s       %sstop playback%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill add n url%s    %ssave a station%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --fg%s         %srun in foreground%s\n", cyan, reset, dim, reset)
 	fmt.Println()
 }
@@ -199,6 +219,75 @@ func exitIfMissing(err error) {
 		fmt.Fprintln(os.Stderr)
 		os.Exit(1)
 	}
+}
+
+// addStation handles the CLI's add command.
+func addStation(args []string) {
+	msg, err := saveStation(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(msg)
+}
+
+// saveStation writes a station to the config file and has the daemon pick it
+// up. It returns what to show for it.
+func saveStation(args []string) (string, error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("usage: chill add <name> <url> [description...]")
+	}
+
+	s := Station{
+		Name: strings.ToLower(args[0]),
+		URL:  args[1],
+		Desc: strings.Join(args[2:], " "),
+	}
+	if s.Desc == "" {
+		s.Desc = s.Name
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+
+	// a station with this name gets replaced, not duplicated
+	found := false
+	for i, old := range cfg.Stations {
+		if strings.EqualFold(old.Name, s.Name) {
+			cfg.Stations[i] = s
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.Stations = append(cfg.Stations, s)
+	}
+
+	path := configPath()
+	if path == "" {
+		return "", fmt.Errorf("no config directory on this system")
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		return "", err
+	}
+
+	// the daemon keeps its own copy of the list, so tell it to reload
+	if isDaemonRunning() {
+		if _, err := ask("reload"); err != nil {
+			return "", fmt.Errorf("saved, but the daemon: %w", err)
+		}
+	}
+
+	return fmt.Sprintf("%s+ %s%s  %s%s%s", pink, s.Name, reset, dim, s.Desc, reset), nil
 }
 
 // findStation returns the station with the given name (case-insensitive),

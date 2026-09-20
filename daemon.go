@@ -10,10 +10,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// defaultVolume is where playback starts, and where volume returns after a restart.
+const defaultVolume = 70
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
@@ -23,17 +27,37 @@ type Daemon struct {
 	exited    chan struct{} // closed once mpv has exited
 	station   *Station      // currently playing station
 	paused    bool          // whether playback is paused
+	volume    int           // 0-100, applied to mpv whenever it changes
 	startedAt time.Time     // when current station started
 	listener  net.Listener  // Unix socket listener
 }
 
 // Status represents the current playback state, serialized as JSON for clients.
 type Status struct {
-	Playing bool   `json:"playing"`          // true if actively playing
-	Paused  bool   `json:"paused"`           // true if paused
+	Playing bool   `json:"playing"`           // true if actively playing
+	Paused  bool   `json:"paused"`            // true if paused
 	Station string `json:"station,omitempty"` // station name
 	Desc    string `json:"desc,omitempty"`    // station description
 	Uptime  string `json:"uptime,omitempty"`  // how long current station has been playing
+	Volume  int    `json:"volume"`            // 0-100
+}
+
+// reply is what the daemon writes back for a command. Clients read the JSON
+// tag to tell a failure from a message worth showing as success; the daemon
+// itself is versioned with the clients, so the old tagless protocol is gone.
+type reply struct {
+	OK  bool   `json:"ok"`
+	Msg string `json:"msg"`
+}
+
+// ok and fail build the responses to a command.
+func ok(msg string) string   { return marshal(reply{true, msg}) }
+func fail(msg string) string { return marshal(reply{false, msg}) }
+
+// marshal serializes a reply, which cannot fail for this shape.
+func marshal(r reply) string {
+	b, _ := json.Marshal(r)
+	return string(b)
 }
 
 // Start initializes the daemon and begins listening for client connections.
@@ -104,15 +128,21 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.pause()
 	case "stop", "quit":
 		d.kill()
-		return "stopped"
+		return ok("stopped")
 	case "skip":
 		return d.skip()
 	case "status":
 		return d.status()
 	case "list":
 		return d.listStations()
+	case "vol":
+		return d.volumeCmd(arg)
+	case "mute":
+		return d.mute()
+	case "reload":
+		return d.reload()
 	default:
-		return "unknown command"
+		return fail("unknown command")
 	}
 }
 
@@ -123,7 +153,7 @@ func (d *Daemon) play(name string) string {
 
 	station := findStation(name)
 	if station == nil {
-		return "unknown station: " + name
+		return fail("unknown station: " + name)
 	}
 
 	d.kill()
@@ -134,12 +164,13 @@ func (d *Daemon) play(name string) string {
 	cmd := exec.Command("mpv",
 		"--no-video",
 		"--really-quiet",
+		fmt.Sprintf("--volume=%d", d.volume),
 		station.URL,
 	)
 
 	tree, err := startInTree(cmd)
 	if err != nil {
-		return "failed to start: " + err.Error()
+		return fail("failed to start: " + err.Error())
 	}
 
 	exited := make(chan struct{})
@@ -154,38 +185,38 @@ func (d *Daemon) play(name string) string {
 	d.paused = false
 	d.startedAt = time.Now()
 
-	return "playing: " + station.Desc
+	return ok("playing: " + station.Desc)
 }
 
 func (d *Daemon) pause() string {
 	if d.tree == nil {
-		return "nothing playing"
+		return fail("nothing playing")
 	}
 	if d.paused {
 		// suspending twice on Windows would take two resumes to undo
-		return "paused"
+		return ok("paused")
 	}
 	if err := d.tree.pause(); err != nil {
-		return err.Error()
+		return fail(err.Error())
 	}
 	d.paused = true
-	return "paused"
+	return ok("paused")
 }
 
 func (d *Daemon) resume() string {
 	if d.tree == nil {
-		return "nothing playing"
+		return fail("nothing playing")
 	}
 	if err := d.tree.resume(); err != nil {
-		return err.Error()
+		return fail(err.Error())
 	}
 	d.paused = false
-	return "resumed"
+	return ok("resumed")
 }
 
 func (d *Daemon) skip() string {
 	if len(stations) == 0 {
-		return "no stations"
+		return fail("no stations")
 	}
 
 	// pick a different station
@@ -203,6 +234,66 @@ func (d *Daemon) skip() string {
 	return d.play(next.Name)
 }
 
+// volumeCmd changes the volume. The argument is a number ("70"), a step
+// ("+5", "-10"), "up"/"down", or empty to just report the current level.
+func (d *Daemon) volumeCmd(arg string) string {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "":
+		return ok(fmt.Sprintf("volume: %d", d.volume))
+	case "up":
+		return d.setVolume(d.volume + 5)
+	case "down":
+		return d.setVolume(d.volume - 5)
+	}
+
+	if strings.HasPrefix(arg, "+") || strings.HasPrefix(arg, "-") {
+		n, err := strconv.Atoi(arg)
+		if err != nil {
+			return fail("bad volume: " + arg)
+		}
+		return d.setVolume(d.volume + n)
+	}
+
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		return fail("bad volume: " + arg)
+	}
+	return d.setVolume(n)
+}
+
+// setVolume clamps the level to 0-100 and restarts playback with it, if
+// something is playing. mpv only takes its volume flag at startup, and the
+// stream is re-resolved by yt-dlp in a couple of seconds.
+func (d *Daemon) setVolume(n int) string {
+	d.volume = max(0, min(100, n))
+	if d.tree == nil {
+		return ok(fmt.Sprintf("volume: %d", d.volume))
+	}
+
+	station := d.station
+	out := d.play(station.Name)
+	if strings.HasPrefix(out, `{"ok":false`) {
+		return out
+	}
+	return ok(fmt.Sprintf("volume: %d │ %s", d.volume, station.Desc))
+}
+
+// mute silences playback without losing the level it returns to.
+func (d *Daemon) mute() string {
+	if d.volume == 0 {
+		return d.setVolume(defaultVolume)
+	}
+	return d.setVolume(0)
+}
+
+// reload picks up station edits from the config file.
+func (d *Daemon) reload() string {
+	if err := loadUserStations(); err != nil {
+		return fail(err.Error())
+	}
+	return ok(fmt.Sprintf("reloaded, %d stations", len(stations)))
+}
+
 func (d *Daemon) kill() {
 	if d.tree != nil {
 		d.tree.kill()
@@ -216,6 +307,7 @@ func (d *Daemon) status() string {
 	s := Status{
 		Playing: d.tree != nil && !d.paused,
 		Paused:  d.paused,
+		Volume:  d.volume,
 	}
 
 	if d.station != nil {
@@ -238,7 +330,10 @@ func (d *Daemon) listStations() string {
 
 // runDaemon starts the daemon process and blocks forever.
 func runDaemon() {
-	d := &Daemon{}
+	if err := loadUserStations(); err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+	}
+	d := &Daemon{volume: defaultVolume}
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start daemon: %v\n", err)
 		os.Exit(1)
