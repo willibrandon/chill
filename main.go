@@ -28,7 +28,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
-	"time"
 )
 
 const (
@@ -87,7 +86,6 @@ var stations = []Station{
 var configErr error
 
 func init() {
-	rand.Seed(time.Now().UnixNano())
 	configErr = loadUserStations()
 }
 

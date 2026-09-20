@@ -125,8 +125,8 @@ func execute(input string) (string, error) {
 	// the argument keeps its original case and spacing, for descriptions
 	cmd := strings.ToLower(parts[0])
 	arg := ""
-	if i := strings.IndexByte(input, ' '); i >= 0 {
-		arg = strings.TrimSpace(input[i+1:])
+	if _, after, ok0 := strings.Cut(input, " "); ok0 {
+		arg = strings.TrimSpace(after)
 	}
 
 	var out string
