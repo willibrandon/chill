@@ -282,7 +282,13 @@ fail. Config warnings never contaminate JSON output.
 
 `chill -i` opens a fullscreen REPL that suggests commands and stations as you type, shown above.
 
-Commands: `play`, `vol`, `mute`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `add`, `remove`, `default`, `sleep`, `reload`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+Commands: `play`, `vol`, `mute`, `skip`, `pause`, `resume`, `toggle`, `status`, `doctor`, `list`, `add`, `remove`, `default`, `sleep`, `reload`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+
+Use `doctor`, `doctor --stations`, `doctor --stream <station-or-url>`, or
+`doctor --logs` in the REPL with the same options as the CLI. Tab completes doctor
+options and station names. Checks run in the background, and their report appears
+in the transcript, including findings from failed checks. `doctor --help` lists
+all options; F1 also shows diagnostic examples.
 
 Use `sleep 45m` or `sleep off` for the timer. `sleep` on its own still plays the
 sleep station, as does `play sleep`.

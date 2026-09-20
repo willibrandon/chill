@@ -189,6 +189,12 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 
 	case resultMsg:
 		t.running = false
+		// Diagnostic commands can return useful findings alongside a failure.
+		if msg.out != "" {
+			for _, line := range strings.Split(msg.out, "\n") {
+				t.print(styleDim.Render("  ┊ ") + line)
+			}
+		}
 		var missing *requirementsError
 		if errors.As(msg.err, &missing) {
 			for _, line := range strings.Split(missing.chill(), "\n") {
@@ -196,10 +202,6 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			}
 		} else if msg.err != nil {
 			t.print(styleError.Render("  error: ") + msg.err.Error())
-		} else if msg.out != "" {
-			for _, line := range strings.Split(msg.out, "\n") {
-				t.print(styleDim.Render("  ┊ ") + line)
-			}
 		}
 		if len(t.pending) > 0 {
 			next := t.pending[0]
@@ -761,6 +763,12 @@ func helpBody() string {
 		row(names[i], c.desc)
 	}
 	row("<station>", "same as play <station>")
+
+	fmt.Fprintf(&b, "\n  %s\n", styleDim.Render("diagnostics"))
+	row("doctor --stations", "check all configured streams")
+	row("doctor --stream sleep", "check one station (or supply a URL)")
+	row("doctor --logs", "show the latest daemon startup log")
+	row("doctor --help", "show all options, including timeouts")
 
 	fmt.Fprintf(&b, "\n  %s\n", styleDim.Render("keys"))
 	for _, k := range keys {

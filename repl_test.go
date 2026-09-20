@@ -72,6 +72,53 @@ func TestSuggestVolArgument(t *testing.T) {
 	}
 }
 
+func TestSuggestDoctor(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  string
+		takes bool
+	}{
+		{"doc", "doctor", true},
+		{"doctor --l", "--logs", false},
+		{"doctor --str", "--stream", true},
+		{"doctor --stream sl", "sleep", false},
+		{"doctor --logs --stream sl", "sleep", false},
+		{"doctor --timeout 3", "30s", false},
+	} {
+		matches := suggest(tt.input)
+		if len(matches) != 1 || matches[0].text != tt.want || matches[0].takes != tt.takes {
+			t.Errorf("suggest(%q) = %+v, want %s (takes=%v)", tt.input, matches, tt.want, tt.takes)
+		}
+	}
+	for _, input := range []string{"doctor --stations ", "doctor --stream sleep ", "doctor --stream=sleep "} {
+		matches := suggest(input)
+		if len(matches) == 0 {
+			t.Fatalf("no remaining options for %q", input)
+		}
+		for _, match := range matches {
+			if match.text == "--stations" || match.text == "--stream" || match.station {
+				t.Errorf("suggest(%q) offered conflicting selector %+v", input, match)
+			}
+		}
+	}
+	if matches := suggest("doctor --help "); len(matches) != 0 {
+		t.Errorf("help offered extra arguments: %+v", matches)
+	}
+}
+
+func TestExecuteDoctorHelp(t *testing.T) {
+	withConfigDir(t)
+	t.Setenv("PATH", t.TempDir())
+	out, err := execute("doctor --help")
+	if err != nil || !strings.Contains(out, "--stations") || !strings.Contains(out, "--stream") {
+		t.Fatalf("doctor help: %q, %v", out, err)
+	}
+	out, err = execute("doctor --timeout 0s")
+	if err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("invalid doctor options: %q, %v", out, err)
+	}
+}
+
 func TestSuggestExactMatchCompletesNothing(t *testing.T) {
 	// typing out a full word leaves nothing to complete
 	if got := suggest("skip"); got != nil {

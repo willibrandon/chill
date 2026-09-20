@@ -27,6 +27,7 @@ var replCommands = []replCommand{
 	{"resume", "", "resume playback"},
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
+	{"doctor", "[options]", "check setup and streams (--help for options)"},
 	{"list", "", "list all stations"},
 	{"add", "<name> <url> [desc]", "save a station to the config"},
 	{"remove", "<name>", "remove a custom station or override"},
@@ -82,6 +83,14 @@ func suggest(input string) []suggestion {
 			{text: "up", desc: "a notch louder"},
 			{text: "down", desc: "a notch quieter"},
 		}
+
+	case strings.EqualFold(words[0], "doctor"):
+		args := words[1:]
+		if !typingNewWord {
+			prefix = args[len(args)-1]
+			args = args[:len(args)-1]
+		}
+		candidates = doctorSuggestions(args)
 	}
 
 	var matches []suggestion
@@ -96,6 +105,61 @@ func suggest(input string) []suggestion {
 		return nil
 	}
 	return matches
+}
+
+// doctorSuggestions follows completed options so values are suggested in the
+// right place and mutually exclusive stream selectors aren't offered together.
+func doctorSuggestions(args []string) []suggestion {
+	used := make(map[string]bool)
+	value := ""
+	for _, arg := range args {
+		if value != "" {
+			value = ""
+			continue
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		if !strings.HasPrefix(name, "-") {
+			return nil
+		}
+		name = strings.TrimLeft(name, "-")
+		switch name {
+		case "stream", "timeout":
+			if !hasValue {
+				value = name
+			}
+		case "stations", "logs":
+		case "help", "h":
+			return nil
+		default:
+			return nil
+		}
+		used[name] = true
+	}
+	if value == "stream" {
+		return stationSuggestions()
+	}
+	if value == "timeout" {
+		return []suggestion{
+			{text: "30s", desc: "30 seconds per stream"},
+			{text: "45s", desc: "45 seconds per stream (default)"},
+			{text: "1m", desc: "one minute per stream"},
+		}
+	}
+	var options []suggestion
+	for _, option := range []suggestion{
+		{text: "--stations", desc: "check all configured streams"},
+		{text: "--stream", desc: "check a station name or URL", takes: true},
+		{text: "--timeout", desc: "set the timeout per stream", takes: true},
+		{text: "--logs", desc: "show the latest daemon startup log"},
+		{text: "--help", desc: "show diagnostic options and examples"},
+	} {
+		name := strings.TrimPrefix(option.text, "--")
+		if used[name] || name == "stream" && used["stations"] || name == "stations" && used["stream"] {
+			continue
+		}
+		options = append(options, option)
+	}
+	return options
 }
 
 // stationSuggestions returns the station names as suggestions.
@@ -163,6 +227,11 @@ func execute(input string) (string, error) {
 
 	case "status":
 		out, err = clientStatus()
+
+	case "doctor":
+		var report strings.Builder
+		err = runDoctor(parts[1:], &report)
+		out = strings.TrimSuffix(report.String(), "\n")
 
 	case "list":
 		out = stationList()
