@@ -99,6 +99,7 @@ func main() {
 	station := flag.String("station", "", "station to play")
 
 	flag.Parse()
+	enableANSI()
 
 	switch {
 	case *daemon:
@@ -108,13 +109,13 @@ func main() {
 	case *list:
 		printStations()
 	case *status:
-		clientStatus()
+		printResult(clientStatus())
 	case *toggle:
-		clientToggle()
+		printResult(clientToggle())
 	case *skip:
-		clientSkip()
+		printResult(clientSkip())
 	case *stop:
-		clientStop()
+		printResult(clientStop())
 	case *fg:
 		// foreground mode (original behavior)
 		s := *station
@@ -139,8 +140,17 @@ func main() {
 		if s == "" {
 			s = "lofi-girl"
 		}
-		clientPlay(s)
+		printResult(clientPlay(s))
 	}
+}
+
+// printResult prints what a command has to say, or reports its error and exits.
+func printResult(out string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(out)
 }
 
 // printStations displays all available stations and usage information.

@@ -1,5 +1,6 @@
-// client.go implements the CLI client that communicates with the daemon.
-// It sends commands over a Unix socket and displays responses to the user.
+// client.go implements the client that communicates with the daemon.
+// It sends commands over a Unix socket and returns the text to show the user,
+// so the CLI can print it and the REPL can add it to its transcript.
 
 package main
 
@@ -69,10 +70,9 @@ func ensureDaemon() error {
 }
 
 // clientPlay starts playing the specified station via the daemon.
-func clientPlay(station string) {
+func clientPlay(station string) (string, error) {
 	if err := ensureDaemon(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 
 	cmd := "play"
@@ -82,35 +82,44 @@ func clientPlay(station string) {
 
 	resp, err := sendCommand(cmd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 
-	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
+	return pink + "♪ " + resp + reset, nil
 }
 
-// clientStatus displays the current playback status.
-func clientStatus() {
+// fetchStatus asks the daemon for its playback state. It returns nil if the
+// daemon isn't running.
+func fetchStatus() (*Status, error) {
 	if !isDaemonRunning() {
-		fmt.Println(dim + "not running" + reset)
-		return
+		return nil, nil
 	}
 
 	resp, err := sendCommand("status")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return nil, err
 	}
 
 	var s Status
 	if err := json.Unmarshal([]byte(resp), &s); err != nil {
-		fmt.Println(resp)
-		return
+		return nil, err
+	}
+	return &s, nil
+}
+
+// clientStatus describes the current playback status.
+func clientStatus() (string, error) {
+	s, err := fetchStatus()
+	if err != nil {
+		return "", err
+	}
+
+	if s == nil {
+		return dim + "not running" + reset, nil
 	}
 
 	if !s.Playing && !s.Paused {
-		fmt.Println(dim + "idle" + reset)
-		return
+		return dim + "idle" + reset, nil
 	}
 
 	state := purple + "▶" + reset
@@ -118,61 +127,81 @@ func clientStatus() {
 		state = dim + "⏸" + reset
 	}
 
-	fmt.Printf("%s %s%s%s\n", state, pink, s.Desc, reset)
-	fmt.Printf("  %s%s │ %s%s\n", dim, s.Station, s.Uptime, reset)
+	return fmt.Sprintf("%s %s%s%s\n  %s%s │ %s%s", state, pink, s.Desc, reset, dim, s.Station, s.Uptime, reset), nil
 }
 
 // clientToggle pauses if playing, resumes if paused, or starts playing if stopped.
-func clientToggle() {
+func clientToggle() (string, error) {
 	if !isDaemonRunning() {
-		clientPlay("lofi-girl")
-		return
+		return clientPlay("lofi-girl")
 	}
 
 	resp, err := sendCommand("toggle")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 
 	if resp == "paused" {
-		fmt.Printf("%s⏸ paused%s\n", dim, reset)
-	} else {
-		fmt.Printf("%s▶ resumed%s\n", purple, reset)
+		return dim + "⏸ paused" + reset, nil
 	}
+	return purple + "▶ resumed" + reset, nil
+}
+
+// clientPause pauses playback.
+func clientPause() (string, error) {
+	if !isDaemonRunning() {
+		return dim + "not running" + reset, nil
+	}
+
+	resp, err := sendCommand("pause")
+	if err != nil {
+		return "", err
+	}
+
+	return dim + "⏸ " + resp + reset, nil
+}
+
+// clientResume resumes paused playback.
+func clientResume() (string, error) {
+	if !isDaemonRunning() {
+		return dim + "not running" + reset, nil
+	}
+
+	resp, err := sendCommand("resume")
+	if err != nil {
+		return "", err
+	}
+
+	return purple + "▶ " + resp + reset, nil
 }
 
 // clientSkip skips to a random different station.
-func clientSkip() {
+func clientSkip() (string, error) {
 	if err := ensureDaemon(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 
 	resp, err := sendCommand("skip")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 
-	fmt.Printf("%s♪ %s%s\n", pink, resp, reset)
+	return pink + "♪ " + resp + reset, nil
 }
 
 // clientStop stops playback and terminates the daemon.
-func clientStop() {
+func clientStop() (string, error) {
 	if !isDaemonRunning() {
-		fmt.Println(dim + "not running" + reset)
-		return
+		return dim + "not running" + reset, nil
 	}
 
 	_, err := sendCommand("stop")
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		// daemon is still there but never answered, so nothing was stopped
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return "", err
 	}
 	// any other error means the daemon exited, that's fine
 
-	fmt.Println(dim + "~ stay chill ~" + reset)
+	return dim + "~ stay chill ~" + reset, nil
 }

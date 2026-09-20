@@ -80,20 +80,36 @@ This means:
 
 ## Interactive Mode
 
-`chill -i` launches a REPL with tab-completion:
+`chill -i` opens a fullscreen REPL that suggests commands and stations as you type:
 
 ```
-        ╭──────────────────╮
-        │   ░▒▓ chill ▓▒░  │
-        ╰──────────────────╯
-  type 'list' for stations, 'quit' to exit
+chill  type a station or a command, tab completes.  help for more
+chill> play chillhop
+  ┊ ♪ playing: Chillhop Radio - jazzy & lofi hip hop
 
-♪ play ch<TAB>
-      chillhop   Chillhop Radio - jazzy & lofi hip hop
-      chillout   Chillout Lounge - calm & relaxing
+────────────────────────────────────────────────────────────────────────
+┌────────────────────────────── commands ──────────────────────────────┐
+│ ❯ pause  pause playback                                              │
+│   play   play a station                                              │
+└──────────────────────────────────────────────────────────────────────┘
+chill[chillhop]> pause
+playing │ chillhop │ 3m12s      F1 help │ Tab complete │ Ctrl+Q quit
 ```
 
-Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`, `quit`
+Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+
+| Key | |
+|-----|---|
+| `Tab` | complete with the highlighted suggestion |
+| `→` | take the ghost text |
+| `↑` / `↓` | pick a suggestion, otherwise walk through history (kept across sessions) |
+| `Enter` | run the line, or take a suggestion picked with `↑` / `↓` |
+| `Esc` | dismiss the suggestions |
+| `PgUp` / `PgDn` | scroll the transcript, so does the mouse wheel |
+| `Ctrl+C` | clear the line |
+| `Ctrl+L` | clear the screen |
+| `F1` | help |
+| `Ctrl+Q` | quit, music keeps playing |
 
 ## Foreground Mode
 
