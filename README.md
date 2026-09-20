@@ -91,7 +91,10 @@ Commands: `play`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `stop`,
 | `Enter` | run the line, or take a suggestion picked with `↑` / `↓` |
 | `Esc` | dismiss the suggestions |
 | `PgUp` / `PgDn` | scroll the transcript, so does the mouse wheel |
-| `Ctrl+C` | clear the line |
+| `Shift+↑` / `Shift+↓` | select lines of the transcript |
+| `y` / `Enter` / `Ctrl+C` | copy what is selected |
+| mouse | drag to select, right click to copy, or to paste when nothing is selected |
+| `Ctrl+C` | clear the line, when nothing is selected |
 | `Ctrl+L` | clear the screen |
 | `F1` | help |
 | `Ctrl+Q` | quit, music keeps playing |

@@ -61,8 +61,16 @@ type tui struct {
 	width, height int
 
 	lines    []string       // transcript, one entry per line
+	rows     []string       // the lines wrapped to the screen, which is what scrolls
 	viewport viewport.Model // scrolls the transcript
 	input    textinput.Model
+
+	sel      selection // transcript text picked for copying
+	dragging bool      // the mouse button is down on the transcript
+	flash    selection // what was just copied, lit up briefly
+	flashing bool
+	notice   string // what the status bar says was copied
+	copies   int    // identifies the latest copy, whose feedback is showing
 
 	suggestions []suggestion // offered for what is being typed
 	selected    int          // highlighted suggestion
@@ -108,7 +116,6 @@ func newTUI() *tui {
 		history:  h,
 		histPos:  len(h.lines),
 	}
-	t.viewport.SoftWrap = true
 	t.viewport.MouseWheelDelta = 3
 	t.helpView.SoftWrap = true
 	t.helpView.MouseWheelDelta = 3
@@ -149,8 +156,25 @@ func (t *tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (t *tui) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		rewrap := msg.Width != t.width
 		t.width, t.height = msg.Width, msg.Height
+		if rewrap {
+			t.wrap()
+		}
 		t.refreshSuggestions()
+		return nil
+
+	case flashDoneMsg:
+		if int(msg) == t.copies {
+			t.flashing = false
+			t.redraw()
+		}
+		return nil
+
+	case noticeDoneMsg:
+		if int(msg) == t.copies {
+			t.notice = ""
+		}
 		return nil
 
 	case statusMsg:
@@ -190,9 +214,20 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		}
 		return cmd
 
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		if t.help {
+			return nil
+		}
+		return t.mouse(msg.(tea.MouseMsg))
+
 	case tea.KeyPressMsg:
 		if t.help {
 			return t.helpKey(msg)
+		}
+		if t.sel.active {
+			if cmd, handled := t.selectionKey(msg); handled {
+				return cmd
+			}
 		}
 		return t.promptKey(msg)
 	}
@@ -214,6 +249,10 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c":
 		// clears the line, never quits
 		t.setInput("")
+		return nil
+
+	case "shift+up":
+		t.selectLines()
 		return nil
 
 	case "ctrl+l":
@@ -293,13 +332,20 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	var cmd tea.Cmd
 	t.input, cmd = t.input.Update(msg)
 	if t.input.Value() != before {
-		t.dismissed = false
-		t.navigated = false
-		t.selected = 0
-		t.histPos = len(t.history.lines)
+		t.edited()
+	} else {
+		t.refreshSuggestions()
 	}
-	t.refreshSuggestions()
 	return cmd
+}
+
+// edited starts suggestions over after the text in the prompt changed.
+func (t *tui) edited() {
+	t.dismissed = false
+	t.navigated = false
+	t.selected = 0
+	t.histPos = len(t.history.lines)
+	t.refreshSuggestions()
 }
 
 // helpKey handles a key press on the help screen, which swallows typing.
@@ -385,14 +431,37 @@ func (t *tui) print(line string) {
 	t.lines = append(t.lines, line)
 	if len(t.lines) > maxTranscript {
 		t.lines = t.lines[len(t.lines)-maxTranscript:]
+		t.wrap()
+	} else {
+		t.rows = append(t.rows, t.wrapped(line)...)
+		t.redraw()
 	}
-	t.viewport.SetContentLines(t.lines)
 	t.viewport.GotoBottom()
+}
+
+// wrapped splits a transcript line into rows that fit beside the scrollbar.
+func (t *tui) wrapped(line string) []string {
+	if t.width < 2 {
+		return []string{line}
+	}
+	return strings.Split(lipgloss.Wrap(line, t.width-1, ""), "\n")
+}
+
+// wrap lays the whole transcript out again, for a new width or after old
+// lines were dropped. Rows move, so what was selected no longer holds.
+func (t *tui) wrap() {
+	t.rows = nil
+	for _, line := range t.lines {
+		t.rows = append(t.rows, t.wrapped(line)...)
+	}
+	t.sel, t.flashing = selection{}, false
+	t.redraw()
 }
 
 // clear empties the transcript, leaving the banner.
 func (t *tui) clear() {
-	t.lines = nil
+	t.lines, t.rows = nil, nil
+	t.sel, t.flashing = selection{}, false
 	t.print(styleDim.Render(banner))
 }
 
@@ -636,8 +705,12 @@ func (t *tui) statusBar() string {
 		facts = []string{"playing", t.status.Station, t.status.Uptime}
 	}
 
-	hints := []string{"F1 help", "Tab complete", "PgUp/PgDn scroll", "Ctrl+Q quit"}
+	hints := []string{"F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
+	case t.sel.active && t.sel.lines:
+		hints = []string{"Shift+↑↓ extend", "y yank", "Esc cancel"}
+	case t.sel.active:
+		hints = []string{"y yank", "Esc cancel"}
 	case t.running:
 		facts = append(facts, "working")
 		hints = []string{"F1 help", "Ctrl+Q quit"}
@@ -645,18 +718,25 @@ func (t *tui) statusBar() string {
 		hints = []string{"F1 help", "Esc dismiss", "Ctrl+Q quit", "Enter accepts"}
 	}
 
+	// what was just copied goes in front of the hints
+	notice, divider := t.notice, ""
+	if notice != "" {
+		divider = " │ "
+	}
+
 	// when it gets narrow the hints go first, from the left
 	left := strings.Join(facts, " │ ")
-	for len(hints) > 1 && lipgloss.Width(left)+2+lipgloss.Width(strings.Join(hints, " │ ")) > t.width {
+	used := lipgloss.Width(left) + 2 + lipgloss.Width(notice+divider)
+	for len(hints) > 1 && used+lipgloss.Width(strings.Join(hints, " │ ")) > t.width {
 		hints = hints[1:]
 	}
 	right := strings.Join(hints, " │ ")
 
-	gap := t.width - lipgloss.Width(left) - lipgloss.Width(right)
+	gap := t.width - lipgloss.Width(left) - lipgloss.Width(notice+divider+right)
 	if gap < 2 {
-		right, gap = "", max(t.width-lipgloss.Width(left), 0)
+		return styleStatus.Render(ansi.Truncate(left+strings.Repeat(" ", t.width), t.width, ""))
 	}
-	return styleStatus.Render(ansi.Truncate(left+strings.Repeat(" ", gap)+right, t.width, ""))
+	return styleStatus.Render(left+strings.Repeat(" ", gap)) + styleNotice.Render(notice) + styleStatus.Render(divider+right)
 }
 
 // helpBody is what the help screen shows under its heading.
@@ -669,6 +749,9 @@ func helpBody() string {
 		{"Esc", "dismiss the suggestions"},
 		{"Ctrl+P / Ctrl+N", "walk through history"},
 		{"PgUp / PgDn", "scroll the transcript, so does the mouse wheel"},
+		{"Shift+↑ / ↓", "select lines of the transcript"},
+		{"y / Enter / Ctrl+C", "copy what is selected"},
+		{"mouse", "drag to select, right click to copy, or to paste"},
 		{"Ctrl+C", "clear the line"},
 		{"Ctrl+L", "clear the screen"},
 		{"Ctrl+Q", "quit, music keeps playing"},
