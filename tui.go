@@ -759,12 +759,13 @@ func helpBody() string {
 
 	var b strings.Builder
 	row := func(name, desc string) {
-		fmt.Fprintf(&b, "  %s%s\n", styleCommand.Render(column(name, 20)), desc)
+		fmt.Fprintf(&b, "  %s%s\n", styleCommand.Render(column(name, helpWidth())), desc)
 	}
 
 	fmt.Fprintf(&b, "\n  %s\n", styleDim.Render("commands"))
-	for _, c := range replCommands {
-		row(strings.TrimSpace(c.name+" "+c.args), c.desc)
+	names := helpNames()
+	for i, c := range replCommands {
+		row(names[i], c.desc)
 	}
 	row("<station>", "same as play <station>")
 

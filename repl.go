@@ -28,7 +28,7 @@ var replCommands = []replCommand{
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
 	{"list", "", "list all stations"},
-	{"add", "<name> <url>", "save a station to the config"},
+	{"add", "<name> <url> [desc]", "save a station to the config"},
 	{"reload", "", "reload stations from the config"},
 	{"stop", "", "stop playback"},
 	{"clear", "", "clear the screen"},
@@ -207,13 +207,32 @@ func execute(input string) (string, error) {
 	return out, err
 }
 
+// helpNames are the command names with their argument hints, plus the
+// station shorthand, in the order help lists them.
+func helpNames() []string {
+	var names []string
+	for _, c := range replCommands {
+		names = append(names, strings.TrimSpace(c.name+" "+c.args))
+	}
+	return append(names, "<station>")
+}
+
+// helpWidth is the column the descriptions start on, fitting the longest name.
+func helpWidth() int {
+	w := 0
+	for _, name := range helpNames() {
+		w = max(w, len(name))
+	}
+	return w + 2
+}
+
 // replHelp lists the REPL commands.
 func replHelp() string {
 	var b strings.Builder
-	for _, c := range replCommands {
-		fmt.Fprintf(&b, "%s%-16s%s  %s%s%s\n", cyan, strings.TrimSpace(c.name+" "+c.args), reset, dim, c.desc, reset)
+	for i, c := range replCommands {
+		fmt.Fprintf(&b, "%s%-*s%s  %s%s%s\n", cyan, helpWidth(), helpNames()[i], reset, dim, c.desc, reset)
 	}
-	fmt.Fprintf(&b, "%s%-16s%s  %s%s%s", cyan, "<station>", reset, dim, "same as play <station>", reset)
+	fmt.Fprintf(&b, "%s%-*s%s  %s%s%s", cyan, helpWidth(), "<station>", reset, dim, "same as play <station>", reset)
 	return b.String()
 }
 
