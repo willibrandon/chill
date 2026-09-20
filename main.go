@@ -9,6 +9,7 @@
 //	chill chillhop     # play specific station
 //	chill -i           # interactive mode (repl)
 //	chill --vol 60     # set volume (or +5, -10, up, down)
+//	chill eq Rock      # select an equalizer preset
 //	chill --mute       # toggle mute
 //	chill --status     # show what's playing
 //	chill --stop       # stop playback
@@ -23,11 +24,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime/debug"
 	"strings"
-	"syscall"
 
 	"github.com/willibrandon/chill/internal/podcast"
 )
@@ -117,10 +116,21 @@ func main() {
 	vol := flag.String("vol", "", "set volume (0-100, +5, -10, up, down)")
 	seek := flag.String("seek", "", "jump within a podcast (-30, +30, 2m)")
 	speed := flag.String("speed", "", "set podcast playback speed (0.5-3)")
+	eqPreset := flag.String("eq", "", "set the 10-band EQ preset")
 
 	flag.Usage = printCLIHelp
 	flag.Parse()
 	enableANSI()
+	applyStartupEqualizer := func() bool {
+		if *eqPreset == "" {
+			return true
+		}
+		if _, err := clientEqualizer(*eqPreset); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return false
+		}
+		return true
+	}
 	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast") {
 		printResult("", fmt.Errorf("--json is supported by status and podcast commands"))
 		return
@@ -136,6 +146,9 @@ func main() {
 			printResult(execute(args[0]))
 			return
 		case "play":
+			if !applyStartupEqualizer() {
+				return
+			}
 			if len(args) == 1 {
 				printResult(clientResume())
 			} else if len(args) == 2 {
@@ -151,6 +164,9 @@ func main() {
 			}
 			printResult(clientVolume(strings.Join(args[1:], " ")))
 			return
+		case "eq":
+			printResult(clientEqualizer(strings.Join(args[1:], " ")))
+			return
 		case "status":
 			if len(args) == 2 && args[1] == "--json" || len(args) == 1 && *jsonOutput {
 				printStatusJSON()
@@ -163,6 +179,9 @@ func main() {
 		}
 	}
 	if flag.NArg() > 0 && (flag.Arg(0) == "podcasts" || flag.Arg(0) == "podcast") {
+		if !applyStartupEqualizer() {
+			return
+		}
 		args := flag.Args()[1:]
 		if *jsonOutput {
 			args = append(args, "--json")
@@ -214,11 +233,13 @@ func main() {
 	if configErr != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", configErr)
 	}
-
 	switch {
 	case *daemon:
 		runDaemon()
 	case *repl || flag.NArg() == 0 && flag.NFlag() == 0:
+		if !applyStartupEqualizer() {
+			return
+		}
 		runRepl()
 	case *version:
 		fmt.Println("chill " + buildVersion())
@@ -254,7 +275,10 @@ func main() {
 	case *speed != "":
 		printResult(clientPodcastControl("speed", *speed))
 	case *fg:
-		// foreground mode (original behavior)
+		// Foreground mode uses the same decoded PCM and equalizer as the daemon.
+		if !applyStartupEqualizer() {
+			return
+		}
 		s := *station
 		if s == "" && flag.NArg() > 0 {
 			s = flag.Arg(0)
@@ -270,6 +294,9 @@ func main() {
 		playForeground(st)
 	default:
 		// Play the requested station via the daemon.
+		if !applyStartupEqualizer() {
+			return
+		}
 		s := *station
 		if s == "" && flag.NArg() > 0 {
 			s = flag.Arg(0)
@@ -327,6 +354,7 @@ func printStations() {
 		{"chill --skip", "skip to random station"},
 		{"chill --toggle", "pause/resume"},
 		{"chill --vol 60", "set volume (or +5, -10, up, down)"},
+		{"chill eq Rock", "select an equalizer preset"},
 		{"chill --mute", "toggle mute"},
 		{"chill --status", "show what's playing"},
 		{"chill --status --json", "machine-readable status"},
@@ -427,50 +455,12 @@ func findStation(name string) *Station {
 	return nil
 }
 
-// playForeground plays a station in foreground mode with mpv's interactive
-// terminal interface, allowing volume control, seeking, and other mpv keybindings.
+// playForeground plays a station with terminal controls and no daemon.
 func playForeground(s *Station) {
-	exitIfMissing(checkRequirements())
-
-	vibe := vibes[randInt(len(vibes))]
-
-	fmt.Print("\033[2J\033[H")
-	fmt.Print(logo)
-	fmt.Printf("  %s♪ %s%s\n", pink, s.Desc, reset)
-	fmt.Printf("  %s~ %s ~%s\n\n", dim, vibe, reset)
-	fmt.Printf("  %s[q]uit  [m]ute  [9/0] volume  [←/→] seek%s\n\n", dim, reset)
-
-	cmd := exec.Command("mpv",
-		"--no-video",
-		"--term-osd-bar",
-		"--term-osd-bar-chars=╺━━╸",
-		"--term-status-msg=  ${playback-time} │ ${audio-codec-name} ${audio-params/samplerate}Hz │ ${audio-bitrate}",
-		"--msg-level=all=no,statusline=status",
-		fmt.Sprintf("--volume=%d", rememberedVolume()),
-		s.URL,
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sig
-		fmt.Print("\n\n  " + dim + "~ stay chill ~" + reset + "\n\n")
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if exitErr.ExitCode() == -1 {
-				return
-			}
-		}
-		fmt.Fprintf(os.Stderr, "mpv error: %v\n", err)
+	if err := runForeground(s); err != nil {
+		exitIfMissing(err)
+		fmt.Fprintf(os.Stderr, "foreground playback: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Println(dim + "~ stay chill ~" + reset)
 }

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/willibrandon/chill/internal/audio"
 	"github.com/willibrandon/chill/internal/podcast"
 
 	"golang.org/x/mod/semver"
@@ -69,6 +71,10 @@ type playbackSnapshot struct {
 	Station *Station `json:"station,omitempty"`
 	// Volume is the restored output level from 0 to 100.
 	Volume int `json:"volume"`
+	// EQPreset preserves the active equalizer preset.
+	EQPreset string `json:"eq_preset,omitempty"`
+	// EQBands preserves the audible curve when Custom is active.
+	EQBands audio.EqualizerBands `json:"eq_bands"`
 	// Muted preserves output mute during handoff.
 	Muted bool `json:"muted"`
 	// Paused prevents resumed playback from briefly becoming audible.
@@ -78,7 +84,7 @@ type playbackSnapshot struct {
 }
 
 func snapshotPlayback(s Status, now time.Time) (playbackSnapshot, error) {
-	snapshot := playbackSnapshot{Volume: s.Volume, Muted: s.Muted, Paused: s.Paused, SleepUntil: s.SleepUntil}
+	snapshot := playbackSnapshot{Volume: s.Volume, EQPreset: s.EQPreset, EQBands: s.EQBands, Muted: s.Muted, Paused: s.Paused, SleepUntil: s.SleepUntil}
 	if s.Episode != nil && s.State != "ended" && s.State != "idle" {
 		snapshot.Episode, snapshot.Position, snapshot.Speed = s.Episode, s.Position, s.Speed
 	}
@@ -143,8 +149,21 @@ func upgradeDaemon() error {
 			return err
 		}
 	}
-	if err := writeJSON(volumePath(), playbackSettings{Volume: snapshot.Volume}); err != nil {
-		return fmt.Errorf("saving volume before daemon upgrade: %w", err)
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		return fmt.Errorf("reading playback settings before daemon upgrade: %w", err)
+	}
+	settings.Volume = snapshot.Volume
+	if snapshot.EQPreset != "" {
+		eq := settings.equalizer()
+		eq.Preset = snapshot.EQPreset
+		if strings.EqualFold(snapshot.EQPreset, customEqualizerPreset) {
+			eq.Custom = snapshot.EQBands
+		}
+		settings.setEqualizer(eq)
+	}
+	if err := savePlaybackSettings(settings); err != nil {
+		return fmt.Errorf("saving playback settings before daemon upgrade: %w", err)
 	}
 	if _, err := sendRawCommand("stop"); err != nil {
 		return fmt.Errorf("stopping outdated daemon: %w", err)
@@ -174,6 +193,15 @@ func (d *Daemon) restore(arg string) string {
 	d.kill()
 	d.volume = max(0, min(100, snapshot.Volume))
 	d.muted = snapshot.Muted
+	if snapshot.EQPreset != "" {
+		eq := d.equalizer()
+		eq.Preset = snapshot.EQPreset
+		if strings.EqualFold(snapshot.EQPreset, customEqualizerPreset) {
+			eq.Custom = snapshot.EQBands
+		}
+		eq = normalizeEqualizerConfig(eq)
+		d.eqPreset, d.eqCustom = eq.Preset, eq.Custom
+	}
 	if snapshot.Station == nil && snapshot.Episode == nil || (!snapshot.SleepUntil.IsZero() && !snapshot.SleepUntil.After(time.Now())) {
 		return ok("restored idle playback")
 	}

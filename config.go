@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/willibrandon/chill/internal/audio"
 )
 
 // config is the JSON document on disk.
@@ -222,11 +224,15 @@ func saveDefaultStation(args []string) (string, error) {
 	return "default station: " + s.Name, nil
 }
 
-// Playback state is separate from the editable station list, so volume changes
-// never rewrite station edits. Mute is temporary and doesn't change this level.
+// Playback state is separate from the editable station list, so audio setting
+// changes never rewrite station edits. Mute is temporary and is not persisted.
 type playbackSettings struct {
 	// Volume is the saved output level from 0 to 100.
 	Volume int `json:"volume"`
+	// EQPreset is a built-in preset name or Custom.
+	EQPreset string `json:"eq_preset,omitempty"`
+	// EQBands is the saved Custom curve, retained while a built-in is active.
+	EQBands audio.EqualizerBands `json:"eq_bands"`
 }
 
 func volumePath() string {
@@ -237,11 +243,51 @@ func volumePath() string {
 	return filepath.Join(filepath.Dir(path), "state.json")
 }
 
-func rememberedVolume() int {
+func defaultPlaybackSettings() playbackSettings {
+	return playbackSettings{Volume: defaultVolume, EQPreset: equalizerPresets[0].Name}
+}
+
+func normalizePlaybackSettings(settings playbackSettings) playbackSettings {
+	if settings.Volume < 0 || settings.Volume > 100 {
+		settings.Volume = defaultVolume
+	}
+	eq := normalizeEqualizerConfig(equalizerConfig{Preset: settings.EQPreset, Custom: settings.EQBands})
+	settings.EQPreset, settings.EQBands = eq.Preset, eq.Custom
+	return settings
+}
+
+func loadPlaybackSettings() (playbackSettings, error) {
+	settings := defaultPlaybackSettings()
 	data, err := os.ReadFile(volumePath())
-	s := playbackSettings{Volume: defaultVolume}
-	if err != nil || json.Unmarshal(data, &s) != nil || s.Volume < 0 || s.Volume > 100 {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return settings, nil
+		}
+		return settings, err
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return defaultPlaybackSettings(), err
+	}
+	return normalizePlaybackSettings(settings), nil
+}
+
+func savePlaybackSettings(settings playbackSettings) error {
+	return writeJSON(volumePath(), normalizePlaybackSettings(settings))
+}
+
+func (settings playbackSettings) equalizer() equalizerConfig {
+	return normalizeEqualizerConfig(equalizerConfig{Preset: settings.EQPreset, Custom: settings.EQBands})
+}
+
+func (settings *playbackSettings) setEqualizer(eq equalizerConfig) {
+	eq = normalizeEqualizerConfig(eq)
+	settings.EQPreset, settings.EQBands = eq.Preset, eq.Custom
+}
+
+func rememberedVolume() int {
+	settings, err := loadPlaybackSettings()
+	if err != nil {
 		return defaultVolume
 	}
-	return s.Volume
+	return settings.Volume
 }

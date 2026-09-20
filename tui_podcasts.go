@@ -300,6 +300,11 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 		t.closePodcasts()
 		return nil
 	}
+	if key == "f4" {
+		t.closePodcasts()
+		t.openEqualizer()
+		return nil
+	}
 	if p.editing {
 		switch key {
 		case "esc", "ctrl+c":

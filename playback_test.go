@@ -7,11 +7,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willibrandon/chill/internal/audio"
 )
 
 type fakePlayer struct {
 	commands [][]any
 	event    chan playerEvent
+	eq       audio.EqualizerBands
 	closed   bool
 	err      error
 }
@@ -20,8 +23,9 @@ func (p *fakePlayer) command(args ...any) error {
 	p.commands = append(p.commands, args)
 	return p.err
 }
-func (p *fakePlayer) events() <-chan playerEvent { return p.event }
-func (p *fakePlayer) close()                     { p.closed = true }
+func (p *fakePlayer) setEqualizer(bands audio.EqualizerBands) { p.eq = bands }
+func (p *fakePlayer) events() <-chan playerEvent              { return p.event }
+func (p *fakePlayer) close()                                  { p.closed = true }
 
 func fakeDaemon(t *testing.T) *Daemon {
 	t.Helper()

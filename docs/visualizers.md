@@ -10,15 +10,17 @@ daemon upgrades retain the same control path. Each player owns:
    Direct media URLs and local files go straight to the decoder.
 2. One FFmpeg decoder producing interleaved stereo float32 little-endian PCM at
    48 kHz. FFmpeg is an explicit install and doctor requirement.
-3. One mpv output process reading PCM from stdin, controlled through JSON IPC.
-4. A fixed-size PCM ring in `internal/audio`.
+3. One ten-band parametric equalizer that processes PCM in the decoder pump.
+4. One mpv output process reading PCM from stdin, controlled through JSON IPC.
+5. A fixed-size PCM ring in `internal/audio`.
 
-The pump sends PCM blocks to mpv and copies them to the ring. It never performs
-FFT or terminal/network I/O. Analysis has its own lock and copies samples under
-the ring lock before computing. Snapshot results are cached for 1/30 second
-across subscribers. A subscriber can be slow without backing up the audio pipe.
-FFmpeg input pacing, disabled mpv read-ahead and a small output buffer limit the
-visual lead; this is not hardware-clock-exact presentation synchronization.
+The pump equalizes each PCM block once, then sends the same samples to mpv and
+the ring. It never performs FFT or terminal/network I/O. Analysis has its own
+lock and copies samples under the ring lock before computing. Snapshot results
+are cached for 1/30 second across subscribers. A subscriber can be slow without
+backing up the audio pipe. FFmpeg input pacing, disabled mpv read-ahead and a
+small output buffer limit the visual lead; this is not hardware-clock-exact
+presentation synchronization.
 
 Cancellation closes the pipe and terminates both process trees. It also cancels
 an in-flight extractor, including its runtime children. The daemon waits for
@@ -35,12 +37,13 @@ the existing reconnect policy. There is no second stream request for analysis.
 - Contiguous stereo samples for scope and phase displays.
 - Timestamp and sequence for identifying absent/stale audio.
 
-The analysis point is before mpv volume/mute and user filters. UI labels call
-these source levels; they do not purport to measure speakers or true peaks.
+The analysis point is after Chill's equalizer and before mpv volume/mute. UI
+labels call this post-EQ audio: changing the curve changes the picture, while a
+volume or mute change does not.
 
 ## Transport and lifecycle
 
-The daemon protocol is version 3. The `visualize` request upgrades its
+The daemon protocol is version 4. The `visualize` request upgrades its
 connection to newline-delimited JSON snapshots (`version: 1`) at 30 Hz. It is
 read-only, uses a dedicated connection and does not start playback. A packet
 contains playback state, station generation and an `audio.Frame`.

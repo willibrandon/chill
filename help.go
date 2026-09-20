@@ -23,6 +23,8 @@ With no arguments, chill opens the interactive REPL.
 		{"pause / resume / toggle / stop", "control current playback"},
 		{"status [--json]", "show current playback"},
 		{"volume [level]", "report or change volume (0-100)"},
+		{"eq [preset|next|prev|list]", "show or select the persistent 10-band equalizer"},
+		{"eq --band <band> <dB>", "edit one band (-12 to +12 dB)"},
 		{"podcasts [command|feed-url]", "browse podcasts; --help lists all commands"},
 		{"seek <seconds>", "jump within a podcast (-30, +30)"},
 		{"speed [0.5-3]", "set podcast playback speed"},
@@ -53,6 +55,8 @@ With no arguments, chill opens the interactive REPL.
 		{"chill podcasts", "open the podcast browser"},
 		{"chill podcasts search history --json", "search for shows as JSON"},
 		{"chill --vol +5", "raise the volume"},
+		{"chill eq Bass-Boost", "select an equalizer preset"},
+		{"chill eq --band 1k +3", "edit one band and select Custom"},
 		{"chill --sleep 45m", "stop playback in 45 minutes"},
 		{"chill --status --json", "show read-only, machine-readable status"},
 	})

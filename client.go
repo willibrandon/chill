@@ -258,6 +258,9 @@ func statusFacts(s *Status) []string {
 	if s.Muted {
 		facts = append(facts, "muted")
 	}
+	if s.EQPreset != "" {
+		facts = append(facts, "eq "+s.EQPreset)
+	}
 	if s.Sleep != "" {
 		facts = append(facts, "sleep "+s.Sleep)
 	}
@@ -353,6 +356,77 @@ func clientVolume(arg string) (string, error) {
 		return "", err
 	}
 	return cyan + "♫ " + resp + reset, nil
+}
+
+// clientEqualizer reports or changes the persistent equalizer. Unlike playback
+// controls, it also works while the daemon is stopped so a curve can be chosen
+// before starting audio.
+func clientEqualizer(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	if strings.EqualFold(arg, "list") {
+		return equalizerPresetList(), nil
+	}
+	unlock, err := lockDaemon()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if isDaemonRunning() {
+		if err := upgradeDaemon(); err != nil {
+			return "", err
+		}
+		command := "eq"
+		if arg != "" {
+			command += " " + arg
+		}
+		out, err := unwrapReply(sendRawCommand(command))
+		if err != nil {
+			return "", err
+		}
+		return cyan + "♫ " + out + reset, nil
+	}
+
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		return "", fmt.Errorf("reading playback state: %w", err)
+	}
+	next, changed, err := updateEqualizerConfig(settings.equalizer(), arg)
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		settings.setEqualizer(next)
+		if err := savePlaybackSettings(settings); err != nil {
+			return "", fmt.Errorf("saving EQ: %w", err)
+		}
+	}
+	return cyan + "♫ " + formatEqualizer(next) + reset, nil
+}
+
+func clientSetEqualizerState(eq equalizerConfig) error {
+	eq = normalizeEqualizerConfig(eq)
+	state, err := json.Marshal(equalizerWireState{Preset: eq.Preset, Custom: append([]float64(nil), eq.Custom[:]...)})
+	if err != nil {
+		return err
+	}
+	unlock, err := lockDaemon()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if isDaemonRunning() {
+		if err := upgradeDaemon(); err != nil {
+			return err
+		}
+		_, err := unwrapReply(sendRawCommand("eq-state " + string(state)))
+		return err
+	}
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		return err
+	}
+	settings.setEqualizer(eq)
+	return savePlaybackSettings(settings)
 }
 
 // clientMute toggles mute without changing the volume.
