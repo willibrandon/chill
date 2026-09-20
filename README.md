@@ -193,34 +193,11 @@ Quitting also cancels diagnostics; music keeps playing.
 
 ### Visualizers
 
-Type `viz` or press **F2** to open a compact visualizer below the transcript.
-While it has focus, **v** cycles modes, **←** goes back, and **V** toggles
-fullscreen. **Space** pauses/resumes, **Esc** returns from fullscreen and then
-to the prompt, and **o** turns visualization off. The panel keeps animating
-while you type commands. These letter shortcuts apply only when the visualizer
-has focus, so typing `vol` and station names works normally.
+31 modes, including spectrum bars, waveforms, matrix, flame, and stereo meters.
+Press **F2** or type `viz` to open. While focused, **v** cycles modes,
+**V** toggles fullscreen, and **Enter** returns to the prompt.
 
-```text
-viz spectrum        # select a mode (Tab completes names)
-viz led             # independent left/right LED peak meters
-viz fullscreen      # toggle fullscreen
-viz next            # next mode
-viz list            # list all 31 modes
-viz off             # close and unsubscribe
-```
-
-Modes: spectrum, bars, mirror, skyline, dots, peaks, ribbon, waterfall,
-spectrogram, scope, stereo-scope, wave, filled-wave, vectorscope, lissajous,
-orbit, rings, radar, spiral, particles, rain, matrix, flame, embers, pulse,
-diamonds, tunnel, starburst, led, vu, balance.
-
-The display uses live Hann-windowed FFT data with logarithmic frequency bands,
-waveforms, and independent stereo peak/RMS levels. Meters are labeled **source
-audio**: they measure decoded samples before mpv volume, mute, and user audio
-filters. LED meters include peak hold and a dBFS scale; these are sample peaks,
-not oversampled inter-sample true-peak measurements. Playback/output buffering
-can introduce a small visual lead. Paused, disconnected, and stale streams clear
-the display. Help and terminals too small for a panel suspend the subscription.
+Use `viz led` to pick a mode, `viz list` to see them all, or `viz off` to close.
 
 ## Foreground Mode
 
