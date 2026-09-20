@@ -20,6 +20,8 @@ const defaultVolume = 70
 
 const maxRetries = 3
 
+const daemonProtocol = 1
+
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
 type Daemon struct {
@@ -46,17 +48,21 @@ type Daemon struct {
 
 // Status represents the current playback state, serialized as JSON for clients.
 type Status struct {
-	Playing bool   `json:"playing"`           // true if actively playing
-	Paused  bool   `json:"paused"`            // true if paused
-	Station string `json:"station,omitempty"` // station name
-	Desc    string `json:"desc,omitempty"`    // station description
-	Uptime  string `json:"uptime,omitempty"`  // how long current station has been playing
-	Volume  int    `json:"volume"`            // 0-100
-	Muted   bool   `json:"muted"`
-	State   string `json:"state"`
-	Error   string `json:"error,omitempty"`
-	Retries int    `json:"retries,omitempty"`
-	Sleep   string `json:"sleep,omitempty"`
+	Version    string    `json:"version"`
+	Protocol   int       `json:"protocol"`
+	Playing    bool      `json:"playing"`           // true if actively playing
+	Paused     bool      `json:"paused"`            // true if paused
+	Station    string    `json:"station,omitempty"` // station name
+	URL        string    `json:"url,omitempty"`
+	Desc       string    `json:"desc,omitempty"`   // station description
+	Uptime     string    `json:"uptime,omitempty"` // how long current station has been playing
+	Volume     int       `json:"volume"`           // 0-100
+	Muted      bool      `json:"muted"`
+	State      string    `json:"state"`
+	Error      string    `json:"error,omitempty"`
+	Retries    int       `json:"retries,omitempty"`
+	Sleep      string    `json:"sleep,omitempty"`
+	SleepUntil time.Time `json:"sleep_until,omitzero"`
 }
 
 // reply is what the daemon writes back for a command. Clients read the JSON
@@ -164,6 +170,8 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.reload()
 	case "sleep":
 		return d.sleep(arg)
+	case "restore":
+		return d.restore(arg)
 	default:
 		return fail("unknown command")
 	}
@@ -434,13 +442,16 @@ func (d *Daemon) kill() {
 
 func (d *Daemon) status() string {
 	s := Status{
-		Playing: d.state == "playing",
-		Paused:  d.state == "paused",
-		Volume:  d.volume,
-		Muted:   d.muted,
-		State:   d.state,
-		Error:   d.lastError,
-		Retries: d.retries,
+		Version:    buildVersion(),
+		Protocol:   daemonProtocol,
+		Playing:    d.state == "playing",
+		Paused:     d.state == "paused",
+		Volume:     d.volume,
+		Muted:      d.muted,
+		State:      d.state,
+		Error:      d.lastError,
+		Retries:    d.retries,
+		SleepUntil: d.sleepUntil,
 	}
 	if s.State == "" {
 		s.State = "idle"
@@ -451,6 +462,7 @@ func (d *Daemon) status() string {
 
 	if d.station != nil {
 		s.Station = d.station.Name
+		s.URL = d.station.URL
 		s.Desc = d.station.Desc
 		if !d.startedAt.IsZero() {
 			s.Uptime = time.Since(d.startedAt).Round(time.Second).String()

@@ -9,6 +9,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.8
+	golang.org/x/mod v0.41.0
 	golang.org/x/sys v0.48.0
 )
 

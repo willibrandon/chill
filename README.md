@@ -81,6 +81,10 @@ This means:
 - Playback controls use the running player; starting a stream still takes time
 - The daemon owns reconnects and sleep timers, so they work after the client exits
 
+After installing a newer version, your next command automatically upgrades an
+outdated daemon. Playback restarts once, preserving your station, volume, mute,
+pause state, and sleep timer.
+
 Volume, mute, and pause/resume use mpv's native IPC controls, so adjusting the
 volume never restarts the stream or resumes paused music. Mute preserves your
 volume, and the last volume is remembered across daemon restarts in `state.json`

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -18,6 +19,21 @@ import (
 
 // sendCommand sends a command to the daemon and returns the response.
 func sendCommand(cmd string) (string, error) {
+	unlock, err := lockDaemon()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if cmd != "stop" && cmd != "quit" {
+		if err := upgradeDaemon(); err != nil {
+			return "", err
+		}
+	}
+	return sendRawCommand(cmd)
+}
+
+// sendRawCommand is used during the upgrade handshake, already under the lock.
+func sendRawCommand(cmd string) (string, error) {
 	conn, err := dialSocket()
 	if err != nil {
 		return "", err
@@ -36,6 +52,13 @@ func sendCommand(cmd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if cmd == "stop" || cmd == "quit" {
+		// Wait for process exit, not just the acknowledgement. Otherwise the
+		// old daemon can unlink the replacement's socket during its cleanup.
+		if _, err := io.Copy(io.Discard, reader); err != nil {
+			return "", err
+		}
+	}
 
 	return strings.TrimSpace(response), nil
 }
@@ -44,6 +67,10 @@ func sendCommand(cmd string) (string, error) {
 // an error carrying the daemon's reason otherwise.
 func ask(cmd string) (string, error) {
 	raw, err := sendCommand(cmd)
+	return unwrapReply(raw, err)
+}
+
+func unwrapReply(raw string, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
@@ -58,15 +85,27 @@ func ask(cmd string) (string, error) {
 	return r.Msg, nil
 }
 
-// ensureDaemon starts the daemon if it's not already running.
-// It waits up to 2 seconds for the daemon to become ready.
+// ensureDaemon starts or upgrades the daemon under the same lock used by
+// commands, so simultaneous clients cannot both replace it.
 func ensureDaemon() error {
-	if isDaemonRunning() {
-		return nil
+	unlock, err := lockDaemon()
+	if err != nil {
+		return err
 	}
+	defer unlock()
+	if isDaemonRunning() {
+		return upgradeDaemon()
+	}
+	return startDaemon()
+}
 
+// startDaemon waits up to two seconds for the new daemon to become ready.
+func startDaemon() error {
 	// start daemon in background
-	exe, _ := os.Executable()
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(exe, "--daemon")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -75,6 +114,7 @@ func ensureDaemon() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	go cmd.Wait()
 
 	// wait for daemon to be ready
 	for i := 0; i < 20; i++ {

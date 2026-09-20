@@ -97,7 +97,12 @@ jobs:
         run: .\chill.exe --list
         shell: pwsh
 
-      - name: Verify CLI playback, controls, sleep timer, and cleanup
+      - name: Install previous release for upgrade test
+        env:
+          GOBIN: ${{ runner.temp }}/chill-legacy
+        run: go install github.com/willibrandon/chill@v0.3.2
+
+      - name: Verify daemon upgrade, playback, controls, and cleanup
         env:
           PYTHONUTF8: "1"
-        run: python .github/scripts/playback.py
+        run: python .github/scripts/playback.py --legacy-bin-dir "${{ runner.temp }}/chill-legacy"
