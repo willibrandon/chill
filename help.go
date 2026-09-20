@@ -64,13 +64,26 @@ Package updates:
 }
 
 func printHelpSection(out io.Writer, title string, rows [][2]string) {
-	fmt.Fprintf(out, "\n%s:\n", title)
+	printStyledHelpSection(out, title, rows, false)
+}
+
+// printStyledHelpSection measures plain labels before adding REPL colors.
+func printStyledHelpSection(out io.Writer, title string, rows [][2]string, colored bool) {
+	heading := title + ":"
+	if colored {
+		heading = cyan + heading + reset
+	}
+	fmt.Fprintf(out, "\n%s\n", heading)
 	width := 0
 	for _, row := range rows {
 		width = max(width, len(row[0]))
 	}
 	for _, row := range rows {
-		fmt.Fprintf(out, "  %-*s  %s\n", width, row[0], row[1])
+		if colored {
+			fmt.Fprintf(out, "  %s%-*s%s  %s%s%s\n", cyan, width, row[0], reset, dim, row[1], reset)
+		} else {
+			fmt.Fprintf(out, "  %-*s  %s\n", width, row[0], row[1])
+		}
 	}
 }
 

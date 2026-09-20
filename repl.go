@@ -228,7 +228,7 @@ func execute(input string) (string, error) {
 
 	switch cmd {
 	case "podcasts", "podcast":
-		return runPodcastCommand(context.Background(), parts[1:])
+		return runPodcast(context.Background(), parts[1:], true)
 	case "seek":
 		return clientSeek(arg)
 	case "speed", "next", "prev":

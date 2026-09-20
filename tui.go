@@ -542,7 +542,7 @@ func (t *tui) start(line string) tea.Cmd {
 	if t.active == "podcasts" || t.active == "podcast" {
 		args := strings.Fields(line)[1:]
 		t.task = newREPLTask(t.commandID, func(ctx context.Context, out io.Writer) error {
-			result, err := runPodcastCommand(ctx, args)
+			result, err := runPodcast(ctx, args, true)
 			if result != "" {
 				fmt.Fprintln(out, result)
 			}

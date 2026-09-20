@@ -12,10 +12,14 @@ import (
 )
 
 // podcastHelp uses the same column formatting as the main CLI help.
-func podcastHelp() string {
+func podcastHelp(colored bool) string {
 	var b strings.Builder
-	fmt.Fprintln(&b, "Usage: chill podcasts [command] [--json]")
-	printHelpSection(&b, "Commands", [][2]string{
+	usage := "Usage: chill podcasts [command] [--json]"
+	if colored {
+		usage = dim + usage + reset
+	}
+	fmt.Fprintln(&b, usage)
+	printStyledHelpSection(&b, "Commands", [][2]string{
 		{"(no command)", "open the podcast browser"},
 		{"<feed-url>", "open a feed in the browser"},
 		{"top [--country us]", "Apple's top 100 shows"},
@@ -32,19 +36,29 @@ func podcastHelp() string {
 		{"queue <feed-url> [number]", "add an episode to the queue"},
 		{"queue", "list queued episodes"},
 		{"clear", "clear the queue"},
-	})
-	printHelpSection(&b, "Options", [][2]string{
+	}, colored)
+	printStyledHelpSection(&b, "Options", [][2]string{
 		{"--json", "print machine-readable results"},
 		{"--restart", "start an episode from the beginning"},
 		{"--country <code>", "use this country for top shows"},
 		{"--help", "show this help"},
-	})
-	fmt.Fprint(&b, `
+	}, colored)
+	footer := `
 Playback: chill seek -30 | chill seek +30 | chill speed 1.5
           chill next | chill prev | chill --toggle | chill --stop
 
 Browser: Enter open/play · f subscribe · / search or RSS URL
-         Shift+Left/Right ±30s · Space pause · Esc back · F3 prompt`)
+         Shift+Left/Right ±30s · Space pause · Esc back · F3 prompt`
+	if colored {
+		lines := strings.Split(footer, "\n")
+		for i, line := range lines {
+			if line != "" {
+				lines[i] = dim + line + reset
+			}
+		}
+		footer = strings.Join(lines, "\n")
+	}
+	b.WriteString(footer)
 	return b.String()
 }
 
@@ -117,12 +131,17 @@ func newestEpisode(episodes []podcast.Episode) int {
 }
 
 func runPodcastCommand(ctx context.Context, args []string) (string, error) {
+	return runPodcast(ctx, args, false)
+}
+
+// runPodcast keeps help presentation separate from command and JSON results.
+func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, error) {
 	jsonOutput, restart, country := false, false, ""
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--help", "-h":
-			return podcastHelp(), nil
+			return podcastHelp(coloredHelp), nil
 		case "--json":
 			jsonOutput = true
 		case "--restart":
@@ -145,7 +164,7 @@ func runPodcastCommand(ctx context.Context, args []string) (string, error) {
 		}
 	}
 	if len(words) == 0 {
-		return podcastHelp(), nil
+		return podcastHelp(coloredHelp), nil
 	}
 	client := podcast.NewClient()
 	action, rest := strings.ToLower(words[0]), words[1:]
@@ -166,7 +185,7 @@ func runPodcastCommand(ctx context.Context, args []string) (string, error) {
 	var err error
 	switch action {
 	case "help":
-		return podcastHelp(), nil
+		return podcastHelp(coloredHelp), nil
 	case "top":
 		if len(rest) != 0 {
 			return "", fmt.Errorf("usage: podcasts top [--country us]")
