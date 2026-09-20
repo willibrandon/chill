@@ -14,16 +14,16 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Vet
         shell: bash
@@ -72,12 +72,16 @@ jobs:
         run: python -m pip install --upgrade "yt-dlp[default]"
 
       - name: Verify playback dependencies
-        shell: bash
+        shell: python
         run: |
-          command -v mpv
-          mpv --version
-          command -v yt-dlp
-          yt-dlp --version
+          import shutil
+          import subprocess
+          for name in ("mpv", "yt-dlp"):
+              executable = shutil.which(name)
+              if executable is None:
+                  raise RuntimeError(f"{name} not found on PATH")
+              print(f"{name}: {executable}", flush=True)
+              subprocess.run([executable, "--version"], check=True, timeout=30)
 
       - name: Test mpv IPC with local audio
         env:
