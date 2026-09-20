@@ -71,6 +71,9 @@ func ensureDaemon() error {
 
 // clientPlay starts playing the specified station via the daemon.
 func clientPlay(station string) (string, error) {
+	if err := checkRequirements(); err != nil {
+		return "", err
+	}
 	if err := ensureDaemon(); err != nil {
 		return "", err
 	}
@@ -177,6 +180,9 @@ func clientResume() (string, error) {
 
 // clientSkip skips to a random different station.
 func clientSkip() (string, error) {
+	if err := checkRequirements(); err != nil {
+		return "", err
+	}
 	if err := ensureDaemon(); err != nil {
 		return "", err
 	}

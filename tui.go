@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -161,7 +162,12 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 
 	case resultMsg:
 		t.running = false
-		if msg.err != nil {
+		var missing *requirementsError
+		if errors.As(msg.err, &missing) {
+			for _, line := range strings.Split(missing.chill(), "\n") {
+				t.print(line)
+			}
+		} else if msg.err != nil {
 			t.print(styleError.Render("  error: ") + msg.err.Error())
 		} else if msg.out != "" {
 			for _, line := range strings.Split(msg.out, "\n") {

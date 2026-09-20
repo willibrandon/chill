@@ -13,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -146,6 +147,7 @@ func main() {
 
 // printResult prints what a command has to say, or reports its error and exits.
 func printResult(out string, err error) {
+	exitIfMissing(err)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -175,6 +177,17 @@ func printStations() {
 	fmt.Println()
 }
 
+// exitIfMissing explains what to install and exits, if that is what err is about.
+func exitIfMissing(err error) {
+	var missing *requirementsError
+	if errors.As(err, &missing) {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, missing.chill())
+		fmt.Fprintln(os.Stderr)
+		os.Exit(1)
+	}
+}
+
 // findStation returns the station with the given name (case-insensitive),
 // or nil if no matching station is found.
 func findStation(name string) *Station {
@@ -190,6 +203,8 @@ func findStation(name string) *Station {
 // playForeground plays a station in foreground mode with mpv's interactive
 // terminal interface, allowing volume control, seeking, and other mpv keybindings.
 func playForeground(s *Station) {
+	exitIfMissing(checkRequirements())
+
 	vibe := vibes[randInt(len(vibes))]
 
 	fmt.Print("\033[2J\033[H")
