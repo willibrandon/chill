@@ -38,7 +38,7 @@ Make sure your Go bin directory is in your `PATH`:
 ## Usage
 
 ```bash
-chill                # play lofi-girl (starts daemon automatically)
+chill                # play default station (starts daemon automatically)
 chill chillhop       # play specific station
 chill -i             # interactive mode (repl)
 chill --skip         # skip to random station
@@ -49,25 +49,61 @@ chill --status       # show what's playing
 chill --stop         # stop playback
 chill --list         # show all stations
 chill add n url desc # save your own station
+chill remove n       # remove a custom station or restore a built-in
+chill default n      # choose the station played by chill
+chill --sleep 45m    # stop playback after 45 minutes
+chill --sleep off    # cancel the sleep timer
 chill --version      # show version
 chill --fg           # run in foreground (no daemon)
 ```
 
 ## Architecture
 
-chill uses a client-server architecture. The first `chill` command spawns a background daemon that manages playback. Subsequent commands communicate with the daemon over IPC (Unix socket on macOS/Linux, TCP on Windows).
+chill uses a client-server architecture. The first playback command spawns a
+background daemon. CLI commands and the REPL communicate with that daemon over
+IPC: a Unix socket on macOS/Linux, or localhost TCP on Windows.
+
+The daemon starts and supervises mpv, sends playback controls over mpv's JSON
+IPC, and listens for player events to track loading and failures. This second
+connection uses a Unix socket on macOS/Linux and a named pipe on Windows. mpv
+uses yt-dlp to resolve YouTube streams.
 
 ```
-┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│ chill       │ ──── │ daemon      │ ──── │ mpv         │
-│ (client)    │ IPC  │ (server)    │      │ (playback)  │
-└─────────────┘      └─────────────┘      └─────────────┘
+┌─────────────┐      ┌─────────────┐           ┌─────────────┐
+│ chill       │ ◀──▶ │ daemon      │ ◀───────▶ │ mpv         │
+│ (CLI/REPL)  │ IPC  │ (server)    │ JSON IPC  │ (playback)  │
+└─────────────┘      └─────────────┘           └─────────────┘
 ```
 
 This means:
 - Music keeps playing after the command exits
 - Control playback from any terminal
-- Fast command execution (no startup delay)
+- Playback controls use the running player; starting a stream still takes time
+- The daemon owns reconnects and sleep timers, so they work after the client exits
+
+Volume, mute, and pause/resume use mpv's native IPC controls, so adjusting the
+volume never restarts the stream or resumes paused music. Mute preserves your
+volume, and the last volume is remembered across daemon restarts in `state.json`
+beside the station config. Mute itself is temporary.
+
+Status distinguishes `loading`, `playing`, `paused`, `failed`, and `idle`.
+If a stream drops or fails to load, chill reports the player error and retries
+up to three times, after 1, 2, and 4 seconds. Each load has a 45-second timeout.
+A minute of successful playback replenishes the retry budget. Errors and retry
+progress also appear in the REPL; use `play` or choose another station to try
+again after the retries are exhausted.
+
+### Sleep timer
+
+While a station is playing or loading, `chill --sleep 45m` schedules playback to
+stop. Durations accept units such as `30s`, `45m`, or `1h30m`. A new timer replaces
+the previous one; `chill --sleep off` cancels it. `chill --status` and the REPL
+status bar show the remaining time.
+
+The timer continues while paused, switching stations, or reconnecting. When it
+expires, playback stops and the daemon becomes idle; `chill --toggle` starts the
+default station again. Explicitly stopping chill clears the timer. Timers are
+not restored across daemon restarts.
 
 ## Stations
 
@@ -82,11 +118,16 @@ This means:
 
 ### Your own stations
 
-Add any YouTube stream with `chill add <name> <url> [description]`, or edit
-`~/.config/chill/stations.json` (`%AppData%\chill\stations.json` on Windows):
+Add any YouTube stream with `chill add <name> <url> [description]`, or edit the
+station config:
+
+- **macOS:** `~/Library/Application Support/chill/stations.json`
+- **Linux:** `~/.config/chill/stations.json` (or `$XDG_CONFIG_HOME/chill/stations.json`)
+- **Windows:** `%AppData%\chill\stations.json`
 
 ```json
 {
+  "default_station": "synthwave",
   "stations": [
     {
       "name": "synthwave",
@@ -107,14 +148,25 @@ Add any YouTube stream with `chill add <name> <url> [description]`, or edit
 }
 ```
 
-A station with the name of a built-in overrides it. The running daemon picks
-up edits with `chill -i` then `reload`, or it loads the file when it starts.
+A station with the name of a built-in overrides it. `chill remove <name>` removes
+a custom station; removing an override restores the built-in. Built-ins cannot
+be removed. `chill default <name>` chooses what `chill`, REPL `play`, and
+`chill --fg` play without a station argument. The initial default is `lofi-girl`;
+removing a custom station that was the default returns to `lofi-girl`.
+
+Add, remove, and default commands update the running daemon automatically. For
+manual file edits, use `chill -i` then `reload`, or restart the daemon. Reload
+rebuilds the list from the built-ins and the current file, including removals.
+Reloading or removing a station does not interrupt a stream already playing.
 
 ## Interactive Mode
 
 `chill -i` opens a fullscreen REPL that suggests commands and stations as you type, shown above.
 
-Commands: `play`, `vol`, `mute`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `add`, `reload`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+Commands: `play`, `vol`, `mute`, `skip`, `pause`, `resume`, `toggle`, `status`, `list`, `add`, `remove`, `default`, `sleep`, `reload`, `stop`, `clear`, `help`, `quit`. A station name on its own plays that station.
+
+Use `sleep 45m` or `sleep off` for the timer. `sleep` on its own still plays the
+sleep station, as does `play sleep`.
 
 | Key | |
 |-----|---|

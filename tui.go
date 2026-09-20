@@ -178,6 +178,9 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case statusMsg:
+		if msg.status != nil && msg.status.Error != "" && (t.status == nil || t.status.Error != msg.status.Error || t.status.State != msg.status.State) {
+			t.print(styleError.Render("  playback: ") + strings.Join(statusFacts(msg.status), " │ "))
+		}
 		t.status = msg.status
 		if !msg.poll {
 			return nil
@@ -693,17 +696,7 @@ func column(s string, width int) string {
 
 // statusBar renders the bottom line: playback on the left, keys on the right.
 func (t *tui) statusBar() string {
-	var facts []string
-	switch {
-	case t.status == nil:
-		facts = []string{"daemon off"}
-	case t.status.Station == "":
-		facts = []string{"idle"}
-	case t.status.Paused:
-		facts = []string{"paused", t.status.Station, t.status.Uptime, fmt.Sprintf("vol %d", t.status.Volume)}
-	default:
-		facts = []string{"playing", t.status.Station, t.status.Uptime, fmt.Sprintf("vol %d", t.status.Volume)}
-	}
+	facts := statusFacts(t.status)
 
 	hints := []string{"F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {

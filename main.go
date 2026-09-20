@@ -16,7 +16,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -70,8 +68,8 @@ type Station struct {
 	Desc string `json:"desc"` // human-readable description
 }
 
-// stations contains the available 24/7 lofi radio streams.
-var stations = []Station{
+// builtinStations is the immutable starting point for every config reload.
+var builtinStations = []Station{
 	// Use the channel's live endpoint because individual YouTube stream IDs
 	// are replaced whenever Lofi Girl restarts the broadcast.
 	{"lofi-girl", "https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live", "Lofi Girl - beats to relax/study to"},
@@ -102,6 +100,7 @@ func main() {
 	toggle := flag.Bool("toggle", false, "toggle play/pause")
 	skip := flag.Bool("skip", false, "skip to random station")
 	stop := flag.Bool("stop", false, "stop playback")
+	sleep := flag.String("sleep", "", "stop playback after a duration (45m, 1h, or off)")
 	fg := flag.Bool("fg", false, "run in foreground (no daemon)")
 	version := flag.Bool("version", false, "show version")
 	mute := flag.Bool("mute", false, "toggle mute")
@@ -125,6 +124,10 @@ func main() {
 		fmt.Println("chill " + buildVersion())
 	case flag.NArg() > 0 && flag.Arg(0) == "add":
 		addStation(flag.Args()[1:])
+	case flag.NArg() > 0 && flag.Arg(0) == "remove":
+		printResult(removeStation(flag.Args()[1:]))
+	case flag.NArg() > 0 && flag.Arg(0) == "default":
+		printResult(saveDefaultStation(flag.Args()[1:]))
 	case *list:
 		printStations()
 	case *status:
@@ -135,6 +138,8 @@ func main() {
 		printResult(clientSkip())
 	case *stop:
 		printResult(clientStop())
+	case *sleep != "":
+		printResult(clientSleep(*sleep))
 	case *vol != "":
 		printResult(clientVolume(*vol))
 	case *mute:
@@ -146,7 +151,7 @@ func main() {
 			s = flag.Arg(0)
 		}
 		if s == "" {
-			s = "lofi-girl"
+			s = defaultStation()
 		}
 		st := findStation(s)
 		if st == nil {
@@ -159,9 +164,6 @@ func main() {
 		s := *station
 		if s == "" && flag.NArg() > 0 {
 			s = flag.Arg(0)
-		}
-		if s == "" {
-			s = "lofi-girl"
 		}
 		printResult(clientPlay(s))
 	}
@@ -191,7 +193,7 @@ func printStations() {
 	fmt.Print(logo)
 	fmt.Println(dim + "  available stations:" + reset)
 	fmt.Println()
-	for _, s := range stations {
+	for _, s := range stationSnapshot() {
 		fmt.Printf("    %s%-16s%s  %s%s%s\n", cyan, s.Name, reset, dim, s.Desc, reset)
 	}
 	fmt.Println()
@@ -207,6 +209,9 @@ func printStations() {
 	fmt.Printf("    %schill --status%s     %sshow what's playing%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --stop%s       %sstop playback%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill add n url%s    %ssave a station%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill remove n%s     %sremove a custom station or override%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill default n%s    %sset the default station%s\n", cyan, reset, dim, reset)
+	fmt.Printf("    %schill --sleep 45m%s  %sstop after 45 minutes (off to cancel)%s\n", cyan, reset, dim, reset)
 	fmt.Printf("    %schill --fg%s         %srun in foreground%s\n", cyan, reset, dim, reset)
 	fmt.Println()
 }
@@ -244,6 +249,9 @@ func saveStation(args []string) (string, error) {
 		URL:  args[1],
 		Desc: strings.Join(args[2:], " "),
 	}
+	if strings.ContainsAny(s.Name, " \t\r\n") || s.Name == "" || strings.ContainsAny(s.URL, "\r\n") {
+		return "", fmt.Errorf("station names must be one word and URLs must be one line")
+	}
 	if s.Desc == "" {
 		s.Desc = s.Name
 	}
@@ -266,26 +274,13 @@ func saveStation(args []string) (string, error) {
 		cfg.Stations = append(cfg.Stations, s)
 	}
 
-	path := configPath()
-	if path == "" {
-		return "", fmt.Errorf("no config directory on this system")
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+	if err := writeJSON(configPath(), cfg); err != nil {
 		return "", err
 	}
 
 	// the daemon keeps its own copy of the list, so tell it to reload
-	if isDaemonRunning() {
-		if _, err := ask("reload"); err != nil {
-			return "", fmt.Errorf("saved, but the daemon: %w", err)
-		}
+	if err := reloadConfig(); err != nil {
+		return "", err
 	}
 
 	return fmt.Sprintf("%s+ %s%s  %s%s%s", pink, s.Name, reset, dim, s.Desc, reset), nil
@@ -295,7 +290,7 @@ func saveStation(args []string) (string, error) {
 // or nil if no matching station is found.
 func findStation(name string) *Station {
 	name = strings.ToLower(name)
-	for _, s := range stations {
+	for _, s := range stationSnapshot() {
 		if strings.ToLower(s.Name) == name {
 			return &s
 		}
@@ -322,7 +317,7 @@ func playForeground(s *Station) {
 		"--term-osd-bar-chars=╺━━╸",
 		"--term-status-msg=  ${playback-time} │ ${audio-codec-name} ${audio-params/samplerate}Hz │ ${audio-bitrate}",
 		"--msg-level=all=no,statusline=status",
-		"--volume=70",
+		fmt.Sprintf("--volume=%d", rememberedVolume()),
 		s.URL,
 	)
 	cmd.Stdout = os.Stdout

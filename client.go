@@ -139,22 +139,50 @@ func clientStatus() (string, error) {
 		return dim + "not running" + reset, nil
 	}
 
-	if !s.Playing && !s.Paused {
-		return dim + "idle" + reset, nil
-	}
+	return strings.Join(statusFacts(s), " │ "), nil
+}
 
-	state := purple + "▶" + reset
-	if s.Paused {
-		state = dim + "⏸" + reset
+// statusFacts is shared by the CLI and the REPL's continuously updated bar.
+func statusFacts(s *Status) []string {
+	if s == nil {
+		return []string{"daemon off"}
 	}
-
-	return fmt.Sprintf("%s %s%s%s\n  %s%s │ %s │ vol %d%s", state, pink, s.Desc, reset, dim, s.Station, s.Uptime, s.Volume, reset), nil
+	state := s.State
+	if state == "" { // also display status from a daemon started before an upgrade
+		state = "idle"
+		if s.Playing {
+			state = "playing"
+		} else if s.Paused {
+			state = "paused"
+		}
+	}
+	facts := []string{state}
+	if s.Station != "" {
+		facts = append(facts, s.Station)
+	}
+	if s.Uptime != "" {
+		facts = append(facts, s.Uptime)
+	}
+	facts = append(facts, fmt.Sprintf("vol %d", s.Volume))
+	if s.Muted {
+		facts = append(facts, "muted")
+	}
+	if s.Sleep != "" {
+		facts = append(facts, "sleep "+s.Sleep)
+	}
+	if s.Error != "" {
+		if s.State == "loading" {
+			facts = append(facts, fmt.Sprintf("retry %d/%d", s.Retries, maxRetries))
+		}
+		facts = append(facts, s.Error)
+	}
+	return facts
 }
 
 // clientToggle pauses if playing, resumes if paused, or starts playing if stopped.
 func clientToggle() (string, error) {
 	if !isDaemonRunning() {
-		return clientPlay("lofi-girl")
+		return clientPlay("")
 	}
 
 	resp, err := ask("toggle")
@@ -165,7 +193,7 @@ func clientToggle() (string, error) {
 	if resp == "paused" {
 		return dim + "⏸ paused" + reset, nil
 	}
-	return purple + "▶ resumed" + reset, nil
+	return purple + "▶ " + resp + reset, nil
 }
 
 // clientPause pauses playback.
@@ -232,7 +260,7 @@ func clientVolume(arg string) (string, error) {
 	return cyan + "♫ " + resp + reset, nil
 }
 
-// clientMute toggles the volume between 0 and the default.
+// clientMute toggles mute without changing the volume.
 func clientMute() (string, error) {
 	if !isDaemonRunning() {
 		return dim + "not running" + reset, nil
@@ -243,6 +271,19 @@ func clientMute() (string, error) {
 		return "", err
 	}
 	return cyan + "♫ " + resp + reset, nil
+}
+
+func clientSleep(arg string) (string, error) {
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	if arg != "off" && arg != "" {
+		if _, err := sleepDuration(arg); err != nil {
+			return "", err
+		}
+	}
+	if !isDaemonRunning() {
+		return "", fmt.Errorf("nothing playing; start a station before setting a sleep timer")
+	}
+	return ask("sleep " + arg)
 }
 
 // clientStop stops playback and terminates the daemon.

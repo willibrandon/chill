@@ -29,6 +29,9 @@ var replCommands = []replCommand{
 	{"status", "", "show current status"},
 	{"list", "", "list all stations"},
 	{"add", "<name> <url> [desc]", "save a station to the config"},
+	{"remove", "<name>", "remove a custom station or override"},
+	{"default", "<station>", "set the default station"},
+	{"sleep", "<duration|off>", "set or cancel a sleep timer (45m, 1h)"},
 	{"reload", "", "reload stations from the config"},
 	{"stop", "", "stop playback"},
 	{"clear", "", "clear the screen"},
@@ -65,7 +68,7 @@ func suggest(input string) []suggestion {
 		}
 		candidates = append(candidates, stationSuggestions()...)
 
-	case strings.EqualFold(words[0], "play") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+	case (strings.EqualFold(words[0], "play") || strings.EqualFold(words[0], "remove") || strings.EqualFold(words[0], "default")) && (len(words) == 1 || len(words) == 2 && !typingNewWord):
 		if len(words) == 2 {
 			prefix = words[1]
 		}
@@ -98,7 +101,7 @@ func suggest(input string) []suggestion {
 // stationSuggestions returns the station names as suggestions.
 func stationSuggestions() []suggestion {
 	var s []suggestion
-	for _, st := range stations {
+	for _, st := range stationSnapshot() {
 		s = append(s, suggestion{text: st.Name, desc: st.Desc, station: true})
 	}
 	return s
@@ -125,9 +128,7 @@ func execute(input string) (string, error) {
 	// the argument keeps its original case and spacing, for descriptions
 	cmd := strings.ToLower(parts[0])
 	arg := ""
-	if _, after, ok0 := strings.Cut(input, " "); ok0 {
-		arg = strings.TrimSpace(after)
-	}
+	arg = strings.TrimSpace(input[len(parts[0]):])
 
 	var out string
 	var err error
@@ -135,7 +136,7 @@ func execute(input string) (string, error) {
 	switch cmd {
 	case "play":
 		if arg == "" {
-			arg = "lofi-girl"
+			arg = defaultStation()
 		}
 		if findStation(arg) == nil {
 			return "", fmt.Errorf("unknown station %s, try list", arg)
@@ -178,6 +179,19 @@ func execute(input string) (string, error) {
 		// this process has its own copy of the station list too
 		configErr = loadUserStations()
 
+	case "remove":
+		out, err = removeStation(parts[1:])
+
+	case "default":
+		out, err = saveDefaultStation(parts[1:])
+
+	case "sleep":
+		if arg == "" {
+			out, err = clientPlay("sleep") // keep the existing station shorthand
+		} else {
+			out, err = clientSleep(arg)
+		}
+
 	case "reload":
 		// the REPL and the daemon each read the config, so both do
 		if err := loadUserStations(); err != nil {
@@ -187,7 +201,7 @@ func execute(input string) (string, error) {
 		if isDaemonRunning() {
 			out, err = ask("reload")
 		} else {
-			out = fmt.Sprintf("reloaded, %d stations", len(stations))
+			out = fmt.Sprintf("reloaded, %d stations", len(stationSnapshot()))
 		}
 
 	case "stop":
@@ -244,7 +258,7 @@ func stationList() string {
 	}
 
 	var lines []string
-	for _, s := range stations {
+	for _, s := range stationSnapshot() {
 		marker := " "
 		if s.Name == current {
 			marker = pink + "♪" + reset

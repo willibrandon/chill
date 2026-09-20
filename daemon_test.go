@@ -22,7 +22,8 @@ func wantReply(t *testing.T, raw string, ok bool, contains string) {
 }
 
 func TestVolumeCommand(t *testing.T) {
-	d := &Daemon{volume: defaultVolume} // nothing playing, so no mpv restarts
+	withConfigDir(t)
+	d := &Daemon{volume: defaultVolume}
 
 	tests := []struct {
 		arg  string
@@ -58,14 +59,14 @@ func TestVolumeCommand(t *testing.T) {
 func TestMuteRoundTrip(t *testing.T) {
 	d := &Daemon{volume: 55}
 
-	wantReply(t, d.mute(), true, "volume: 0")
-	if d.volume != 0 {
-		t.Errorf("mute left volume %d, want 0", d.volume)
+	wantReply(t, d.mute(), true, "muted")
+	if d.volume != 55 || !d.muted {
+		t.Errorf("mute: volume %d, muted %v", d.volume, d.muted)
 	}
 
 	wantReply(t, d.mute(), true, "")
-	if d.volume != defaultVolume {
-		t.Errorf("unmute left volume %d, want %d", d.volume, defaultVolume)
+	if d.volume != 55 || d.muted {
+		t.Errorf("unmute: volume %d, muted %v", d.volume, d.muted)
 	}
 }
 

@@ -9,27 +9,39 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// defaultVolume is where playback starts, and where volume returns after a restart.
+// defaultVolume is used until a volume has been saved.
 const defaultVolume = 70
+
+const maxRetries = 3
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
 type Daemon struct {
-	mu        sync.Mutex    // protects all fields
-	tree      *processTree  // mpv and any processes it spawned
-	exited    chan struct{} // closed once mpv has exited
-	station   *Station      // currently playing station
-	paused    bool          // whether playback is paused
-	volume    int           // 0-100, applied to mpv whenever it changes
-	startedAt time.Time     // when current station started
-	listener  net.Listener  // Unix socket listener
+	mu              sync.Mutex // protects all fields
+	player          player
+	newPlayer       func(int, bool, bool) (player, error) // nil uses mpv
+	watchDone       chan struct{}
+	station         *Station // currently playing station
+	paused          bool     // whether playback is paused
+	muted           bool
+	volume          int    // 0-100, applied to mpv whenever it changes
+	state           string // idle, loading, playing, paused, failed
+	lastError       string
+	retries         int
+	retryTimer      *time.Timer
+	loadTimer       *time.Timer
+	generation      uint64 // invalidates callbacks after switching or stopping
+	sleepTimer      *time.Timer
+	sleepUntil      time.Time
+	sleepGeneration uint64
+	startedAt       time.Time    // when current station started
+	listener        net.Listener // Unix socket listener
 }
 
 // Status represents the current playback state, serialized as JSON for clients.
@@ -40,6 +52,11 @@ type Status struct {
 	Desc    string `json:"desc,omitempty"`    // station description
 	Uptime  string `json:"uptime,omitempty"`  // how long current station has been playing
 	Volume  int    `json:"volume"`            // 0-100
+	Muted   bool   `json:"muted"`
+	State   string `json:"state"`
+	Error   string `json:"error,omitempty"`
+	Retries int    `json:"retries,omitempty"`
+	Sleep   string `json:"sleep,omitempty"`
 }
 
 // reply is what the daemon writes back for a command. Clients read the JSON
@@ -122,11 +139,15 @@ func (d *Daemon) execute(action, arg string) string {
 	case "resume":
 		return d.resume()
 	case "toggle":
+		if d.state == "idle" || d.state == "failed" || d.station == nil {
+			return d.play("")
+		}
 		if d.paused {
 			return d.resume()
 		}
 		return d.pause()
 	case "stop", "quit":
+		d.cancelSleep()
 		d.kill()
 		return ok("stopped")
 	case "skip":
@@ -141,6 +162,8 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.mute()
 	case "reload":
 		return d.reload()
+	case "sleep":
+		return d.sleep(arg)
 	default:
 		return fail("unknown command")
 	}
@@ -148,7 +171,7 @@ func (d *Daemon) execute(action, arg string) string {
 
 func (d *Daemon) play(name string) string {
 	if name == "" {
-		name = "lofi-girl"
+		name = defaultStation()
 	}
 
 	station := findStation(name)
@@ -157,64 +180,148 @@ func (d *Daemon) play(name string) string {
 	}
 
 	d.kill()
-
-	// Stdout and stderr stay nil so they go to the null device. An io.Writer
-	// would make exec use pipes, and Wait would then block until every
-	// process that inherited them has exited.
-	cmd := exec.Command("mpv",
-		"--no-video",
-		"--really-quiet",
-		fmt.Sprintf("--volume=%d", d.volume),
-		station.URL,
-	)
-
-	tree, err := startInTree(cmd)
-	if err != nil {
+	d.station = station
+	if err := d.startPlayback(); err != nil {
+		d.state, d.lastError = "failed", err.Error()
 		return fail("failed to start: " + err.Error())
 	}
+	return ok("loading: " + station.Desc)
+}
 
-	exited := make(chan struct{})
+// startPlayback is called under mu, both for a new station and a reconnect.
+func (d *Daemon) startPlayback() error {
+	d.state = "loading"
+	start := d.newPlayer
+	if start == nil {
+		start = startPlayer
+	}
+	p, err := start(d.volume, d.muted, d.paused)
+	if err != nil {
+		return err
+	}
+	d.player = p
+	d.watchDone = make(chan struct{})
+	done := d.watchDone
 	go func() {
-		cmd.Wait()
-		close(exited)
+		for {
+			select {
+			case e, open := <-p.events():
+				if !open {
+					e = playerEvent{err: "mpv event stream closed"}
+				}
+				d.mu.Lock()
+				if d.player == p {
+					d.playerEvent(e)
+				}
+				d.mu.Unlock()
+				if !open {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
 	}()
+	if err := p.command("loadfile", d.station.URL, "replace"); err != nil {
+		d.closePlayer()
+		return err
+	}
+	d.loadTimer = time.AfterFunc(45*time.Second, func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.player == p && d.state == "loading" {
+			d.playbackFailed("stream took too long to load")
+		}
+	})
+	return nil
+}
 
-	d.tree = tree
-	d.exited = exited
-	d.station = station
-	d.paused = false
-	d.startedAt = time.Now()
+func (d *Daemon) playerEvent(e playerEvent) {
+	if e.err != "" {
+		d.playbackFailed(e.err)
+		return
+	}
+	if e.loaded {
+		if d.loadTimer != nil {
+			d.loadTimer.Stop()
+			d.loadTimer = nil
+		}
+		d.state, d.lastError = "playing", ""
+		if d.paused {
+			d.state = "paused"
+		}
+		d.startedAt = time.Now()
+	}
+}
 
-	return ok("playing: " + station.Desc)
+func (d *Daemon) playbackFailed(reason string) {
+	d.closePlayer()
+	d.lastError = reason
+	d.state = "failed"
+	// A minute of successful playback replenishes the retry budget. Rapid
+	// load/disconnect loops still stop after three reconnects.
+	if !d.startedAt.IsZero() && time.Since(d.startedAt) >= time.Minute {
+		d.retries = 0
+	}
+	d.startedAt = time.Time{}
+	if d.retries >= maxRetries {
+		d.paused = false
+		return
+	}
+	delay := time.Second << d.retries
+	d.retries++
+	d.state = "loading"
+	generation := d.generation
+	d.retryTimer = time.AfterFunc(delay, func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.generation != generation {
+			return
+		}
+		d.retryTimer = nil
+		if err := d.startPlayback(); err != nil {
+			d.playbackFailed(err.Error())
+		}
+	})
 }
 
 func (d *Daemon) pause() string {
-	if d.tree == nil {
+	if d.station == nil || d.state == "failed" {
 		return fail("nothing playing")
 	}
 	if d.paused {
-		// suspending twice on Windows would take two resumes to undo
 		return ok("paused")
 	}
-	if err := d.tree.pause(); err != nil {
-		return fail(err.Error())
+	if d.player != nil {
+		if err := d.player.command("set_property", "pause", true); err != nil {
+			return fail(err.Error())
+		}
 	}
 	d.paused = true
+	if d.state == "playing" {
+		d.state = "paused"
+	}
 	return ok("paused")
 }
 
 func (d *Daemon) resume() string {
-	if d.tree == nil {
+	if d.station == nil || d.state == "failed" {
 		return fail("nothing playing")
 	}
-	if err := d.tree.resume(); err != nil {
-		return fail(err.Error())
+	if d.player != nil {
+		if err := d.player.command("set_property", "pause", false); err != nil {
+			return fail(err.Error())
+		}
 	}
 	d.paused = false
+	if d.state == "paused" {
+		d.state = "playing"
+	}
 	return ok("resumed")
 }
 
 func (d *Daemon) skip() string {
+	stations := stationSnapshot()
 	if len(stations) == 0 {
 		return fail("no stations")
 	}
@@ -237,6 +344,7 @@ func (d *Daemon) skip() string {
 // volumeCmd changes the volume. The argument is a number ("70"), a step
 // ("+5", "-10"), "up"/"down", or empty to just report the current level.
 func (d *Daemon) volumeCmd(arg string) string {
+	arg = strings.TrimSpace(arg)
 	switch strings.ToLower(strings.TrimSpace(arg)) {
 	case "":
 		return ok(fmt.Sprintf("volume: %d", d.volume))
@@ -261,29 +369,33 @@ func (d *Daemon) volumeCmd(arg string) string {
 	return d.setVolume(n)
 }
 
-// setVolume clamps the level to 0-100 and restarts playback with it, if
-// something is playing. mpv only takes its volume flag at startup, and the
-// stream is re-resolved by yt-dlp in a couple of seconds.
+// setVolume updates the live player without disturbing the stream or pause.
 func (d *Daemon) setVolume(n int) string {
-	d.volume = max(0, min(100, n))
-	if d.tree == nil {
-		return ok(fmt.Sprintf("volume: %d", d.volume))
+	n = max(0, min(100, n))
+	if d.player != nil {
+		if err := d.player.command("set_property", "volume", n); err != nil {
+			return fail(err.Error())
+		}
 	}
-
-	station := d.station
-	out := d.play(station.Name)
-	if strings.HasPrefix(out, `{"ok":false`) {
-		return out
+	d.volume = n
+	if err := writeJSON(volumePath(), playbackSettings{Volume: n}); err != nil {
+		return fail("volume changed, but could not save it: " + err.Error())
 	}
-	return ok(fmt.Sprintf("volume: %d │ %s", d.volume, station.Desc))
+	return ok(fmt.Sprintf("volume: %d", d.volume))
 }
 
 // mute silences playback without losing the level it returns to.
 func (d *Daemon) mute() string {
-	if d.volume == 0 {
-		return d.setVolume(defaultVolume)
+	if d.player != nil {
+		if err := d.player.command("set_property", "mute", !d.muted); err != nil {
+			return fail(err.Error())
+		}
 	}
-	return d.setVolume(0)
+	d.muted = !d.muted
+	if d.muted {
+		return ok(fmt.Sprintf("muted (volume: %d)", d.volume))
+	}
+	return ok(fmt.Sprintf("unmuted (volume: %d)", d.volume))
 }
 
 // reload picks up station edits from the config file.
@@ -291,29 +403,58 @@ func (d *Daemon) reload() string {
 	if err := loadUserStations(); err != nil {
 		return fail(err.Error())
 	}
-	return ok(fmt.Sprintf("reloaded, %d stations", len(stations)))
+	return ok(fmt.Sprintf("reloaded, %d stations", len(stationSnapshot())))
+}
+
+func (d *Daemon) closePlayer() {
+	if d.loadTimer != nil {
+		d.loadTimer.Stop()
+		d.loadTimer = nil
+	}
+	if d.player != nil {
+		close(d.watchDone)
+		d.player.close()
+		d.player = nil
+	}
 }
 
 func (d *Daemon) kill() {
-	if d.tree != nil {
-		d.tree.kill()
-		<-d.exited
+	d.generation++
+	if d.retryTimer != nil {
+		d.retryTimer.Stop()
+		d.retryTimer = nil
 	}
-	d.tree = nil
+	d.closePlayer()
 	d.station = nil
+	d.paused = false
+	d.state, d.lastError = "idle", ""
+	d.startedAt = time.Time{}
+	d.retries = 0
 }
 
 func (d *Daemon) status() string {
 	s := Status{
-		Playing: d.tree != nil && !d.paused,
-		Paused:  d.paused,
+		Playing: d.state == "playing",
+		Paused:  d.state == "paused",
 		Volume:  d.volume,
+		Muted:   d.muted,
+		State:   d.state,
+		Error:   d.lastError,
+		Retries: d.retries,
+	}
+	if s.State == "" {
+		s.State = "idle"
+	}
+	if !d.sleepUntil.IsZero() {
+		s.Sleep = max(time.Duration(0), time.Until(d.sleepUntil)).Round(time.Second).String()
 	}
 
 	if d.station != nil {
 		s.Station = d.station.Name
 		s.Desc = d.station.Desc
-		s.Uptime = time.Since(d.startedAt).Round(time.Second).String()
+		if !d.startedAt.IsZero() {
+			s.Uptime = time.Since(d.startedAt).Round(time.Second).String()
+		}
 	}
 
 	b, _ := json.Marshal(s)
@@ -322,7 +463,7 @@ func (d *Daemon) status() string {
 
 func (d *Daemon) listStations() string {
 	var names []string
-	for _, s := range stations {
+	for _, s := range stationSnapshot() {
 		names = append(names, s.Name)
 	}
 	return strings.Join(names, " ")
@@ -333,7 +474,7 @@ func runDaemon() {
 	if err := loadUserStations(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 	}
-	d := &Daemon{volume: defaultVolume}
+	d := &Daemon{volume: rememberedVolume(), state: "idle"}
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start daemon: %v\n", err)
 		os.Exit(1)
