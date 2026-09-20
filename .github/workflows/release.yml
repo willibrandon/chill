@@ -3,9 +3,17 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to rebuild the release assets for
+        required: true
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -14,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.TAG }}
           # the go command reads the version from the tag
           fetch-depth: 0
 
@@ -24,26 +33,33 @@ jobs:
 
       - name: Build
         run: |
-          mkdir dist
+          # build outside the checkout, stray files would mark the version as +dirty
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out/dist"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${target%/*}
             arch=${target#*/}
-            name=chill_${GITHUB_REF_NAME#v}_${os}_${arch}
+            name=chill_${TAG#v}_${os}_${arch}
             ext=""
             if [ "$os" = windows ]; then ext=".exe"; fi
 
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "build/$name/chill$ext" .
-            cp README.md "build/$name/"
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out/$name/chill$ext" .
+            cp README.md "$out/$name/"
 
             if [ "$os" = windows ]; then
-              (cd build && zip -qr "../dist/$name.zip" "$name")
+              (cd "$out" && zip -qr "dist/$name.zip" "$name")
             else
-              tar -C build -czf "dist/$name.tar.gz" "$name"
+              tar -C "$out" -czf "$out/dist/$name.tar.gz" "$name"
             fi
           done
-          (cd dist && sha256sum * > checksums.txt)
+          (cd "$out/dist" && sha256sum * > checksums.txt)
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$RUNNER_TEMP"/out/dist/* --clobber
+          else
+            gh release create "$TAG" "$RUNNER_TEMP"/out/dist/* --title "$TAG" --generate-notes
+          fi
