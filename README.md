@@ -333,32 +333,6 @@ With mpv installed, run the playback integration test:
 CHILL_TEST_MPV=1 go test -count=1 -run TestMPVIntegration -v ./...
 ```
 
-The manually triggered **YouTube smoke test** workflow can also audit all built-in
-stations before testing playback. Live checks depend on YouTube access and stay
-separate from deterministic CI.
-
-After publishing a stable release, the release workflow automatically updates
-`Formula/chill.rb` in `willibrandon/homebrew-tap` and `bucket/chill.json` in
-`willibrandon/scoop-bucket`, using the published `checksums.txt`, and commits and
-pushes each change to `main`. Scoop's versioned extraction directories are updated
-along with its URLs and hashes. Prerelease tags skip package updates, reruns are
-idempotent, and older releases cannot roll back a newer package version.
-
-Configure these repository Actions secrets on `willibrandon/chill`:
-
-- `HOMEBREW_TAP_TOKEN`: write access to `willibrandon/homebrew-tap` contents.
-- `SCOOP_BUCKET_TOKEN`: write access to `willibrandon/scoop-bucket` contents.
-
-To retry a failed package update, rerun the failed workflow jobs. The release
-workflow also accepts an existing tag through **Run workflow** to rebuild and
-republish assets, then update both packages.
-
-Test the package updater with:
-
-```bash
-python3 -m unittest discover -s .github/scripts -p 'test_*.py'
-```
-
 ## License
 
 MIT
