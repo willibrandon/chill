@@ -73,28 +73,28 @@ Make sure your Go bin directory is in your `PATH`:
 ## Usage
 
 ```bash
-chill                # play default station (starts daemon automatically)
-chill chillhop       # play specific station
-chill -i             # interactive mode (repl)
-chill --skip         # skip to random station
-chill --toggle       # pause/resume
-chill --vol 60       # set volume (also +5, -10, up, down)
-chill --mute         # toggle mute
-chill --status       # show what's playing
-chill --status --json # read-only, machine-readable status
-chill doctor         # check dependencies, config, and daemon compatibility
+chill                   # play default station (starts daemon automatically)
+chill chillhop          # play specific station
+chill -i                # interactive mode (repl)
+chill --skip            # skip to random station
+chill --toggle          # pause/resume
+chill --vol 60          # set volume (also +5, -10, up, down)
+chill --mute            # toggle mute
+chill --status          # show what's playing
+chill --status --json   # read-only, machine-readable status
+chill doctor            # check dependencies, config, and daemon compatibility
 chill doctor --stations # resolve every configured stream without playing audio
-chill --stop         # stop playback
-chill --list         # show all stations
-chill add n url desc # save your own station
-chill remove n       # remove a custom station or restore a built-in
-chill default n      # choose the station played by chill
-chill --sleep 45m    # stop playback after 45 minutes
-chill --sleep off    # cancel the sleep timer
-chill --version      # show version
-chill --help         # show commands, options, and examples
-chill update         # install the latest release
-chill --fg           # run in foreground (no daemon)
+chill --stop            # stop playback
+chill --list            # show all stations
+chill add n url desc    # save your own station
+chill remove n          # remove a custom station or restore a built-in
+chill default n         # choose the station played by chill
+chill --sleep 45m       # stop playback after 45 minutes
+chill --sleep off       # cancel the sleep timer
+chill --version         # show version
+chill --help            # show commands, options, and examples
+chill update            # install the latest release
+chill --fg              # run in foreground (no daemon)
 ```
 
 ## Architecture
@@ -108,11 +108,11 @@ IPC, and listens for player events to track loading and failures. This second
 connection uses a Unix socket on macOS/Linux and a named pipe on Windows. mpv
 uses yt-dlp to resolve YouTube streams.
 
-```
-┌─────────────┐      ┌─────────────┐           ┌─────────────┐
-│ chill       │ ◀──▶ │ daemon      │ ◀───────▶ │ mpv         │
-│ (CLI/REPL)  │ IPC  │ (server)    │ JSON IPC  │ (playback)  │
-└─────────────┘      └─────────────┘           └─────────────┘
+```text
++-------------+      +-------------+           +-------------+
+| chill       | <--> | daemon      | <-------> | mpv         |
+| (CLI/REPL)  | IPC  | (server)    | JSON IPC  | (playback)  |
++-------------+      +-------------+           +-------------+
 ```
 
 This means:
