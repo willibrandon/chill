@@ -195,6 +195,28 @@ Use `--fg` to run in the terminal with mpv controls:
 | `9` / `0` | volume down / up |
 | `←` / `→` | seek |
 
+## Development checks
+
+CI checks playback with a generated local WAV and null audio output on macOS,
+Linux, and Windows. It asserts that playback reaches `playing`, exercises live
+controls and sleep timers, and verifies daemon/player cleanup. Install mpv and
+yt-dlp, then run the same checks locally:
+
+```bash
+go test ./...
+CHILL_TEST_MPV=1 go test -count=1 -run TestMPVIntegration -v ./...
+go build .
+python .github/scripts/playback.py
+```
+
+The mpv integration test deliberately opens a missing file to verify error
+reporting; its log labels that error as expected.
+
+The separate **YouTube smoke test** workflow can be run manually from GitHub
+Actions. It uses current yt-dlp and Deno, requires actual live playback, and
+prints verbose extraction diagnostics on failure. Live stream availability
+and YouTube restrictions on hosted runners can affect that check.
+
 ## License
 
 MIT

@@ -174,7 +174,7 @@ func TestMPVIntegration(t *testing.T) {
 		if e.err == "" {
 			t.Fatalf("missing file did not fail: %+v", e)
 		}
-		t.Logf("mpv error surfaced: %s", e.err)
+		t.Logf("expected error for deliberately missing file: %s", e.err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("mpv did not report the missing file")
 	}

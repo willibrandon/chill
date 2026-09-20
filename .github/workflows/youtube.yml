@@ -1,0 +1,46 @@
+name: YouTube smoke test
+
+# Live extraction depends on YouTube availability and access from hosted runners.
+# Keep this explicit external-service check separate from deterministic CI.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube stream URL
+        required: true
+        default: https://www.youtube.com/channel/UCSJ4gkVC6NrvII8umztf0Ow/live
+
+jobs:
+  playback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Install playback dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mpv
+          python -m pip install --upgrade "yt-dlp[default]"
+          mpv --version
+          yt-dlp --version
+          deno --version
+      - name: Build
+        run: go build -v .
+      - name: Verify live YouTube playback
+        env:
+          STREAM_URL: ${{ inputs.url }}
+        run: python .github/scripts/playback.py --youtube "$STREAM_URL"
+      - name: Extract YouTube diagnostics on failure
+        if: failure()
+        env:
+          STREAM_URL: ${{ inputs.url }}
+        run: yt-dlp --verbose --simulate --no-playlist -- "$STREAM_URL"

@@ -21,6 +21,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Vet
         shell: bash
         run: |
@@ -38,27 +42,47 @@ jobs:
         shell: bash
         run: go test ./...
 
-      - name: Install mpv and yt-dlp (Ubuntu)
+      - name: Install mpv (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mpv
-          pip install yt-dlp
+          sudo apt-get install -y --no-install-recommends mpv
 
-      - name: Install mpv and yt-dlp (macOS)
+      - name: Install mpv (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install mpv yt-dlp
+          brew install mpv
 
-      - name: Install mpv and yt-dlp (Windows)
+      - name: Install mpv (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          choco install mpv yt-dlp -y
+          choco install mpv -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Chocolatey changes the registry PATH, not the Actions runner's
+          # environment. Export mpv's directory for subsequent steps.
+          $paths = ([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')) -split ';'
+          $mpvPaths = @($paths | Where-Object {
+            $_ -and ((Test-Path (Join-Path $_ 'mpv.exe')) -or (Test-Path (Join-Path $_ 'mpv.com')))
+          } | Select-Object -Unique)
+          if ($mpvPaths.Count -eq 0) { throw 'mpv installation did not add an executable directory to PATH' }
+          $mpvPaths | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install current yt-dlp
+        run: python -m pip install --upgrade "yt-dlp[default]"
+
+      - name: Verify playback dependencies
+        shell: bash
+        run: |
+          command -v mpv
+          mpv --version
+          command -v yt-dlp
+          yt-dlp --version
 
       - name: Test mpv IPC with local audio
         env:
           CHILL_TEST_MPV: "1"
-        run: go test -run TestMPVIntegration -v ./...
+        run: go test -count=1 -run TestMPVIntegration -v ./...
 
       - name: Test --list (Unix)
         if: matrix.os != 'windows-latest'
@@ -69,42 +93,7 @@ jobs:
         run: .\chill.exe --list
         shell: pwsh
 
-      - name: Test playback (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          # Start playing in background
-          ./chill &
-          sleep 5
-          # Check status
-          ./chill --status
-          # Stop playback
-          ./chill --stop
-        shell: bash
-
-      - name: Test playback (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          # Start playing in background
-          ./chill &
-          sleep 5
-          # Check status
-          ./chill --status
-          # Stop playback
-          ./chill --stop
-        shell: bash
-
-      - name: Test playback (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          # Start playing in background
-          Start-Process -FilePath ".\chill.exe" -NoNewWindow
-          Start-Sleep -Seconds 5
-          # Check status
-          .\chill.exe --status
-          # Stop playback
-          .\chill.exe --stop
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # mpv runs behind a launcher on Windows, make sure nothing was left playing
-          Start-Sleep -Seconds 1
-          if (Get-Process mpv -ErrorAction SilentlyContinue) { throw "mpv still running after --stop" }
-        shell: pwsh
+      - name: Verify CLI playback, controls, sleep timer, and cleanup
+        env:
+          PYTHONUTF8: "1"
+        run: python .github/scripts/playback.py
