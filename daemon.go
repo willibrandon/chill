@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willibrandon/chill/internal/audio"
 	"github.com/willibrandon/chill/internal/episode"
 	"github.com/willibrandon/chill/internal/podcast"
 )
@@ -24,7 +26,7 @@ const defaultVolume = 70
 
 const maxRetryDelay = 30 * time.Second
 
-const daemonProtocol = 3
+const daemonProtocol = 4
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
@@ -47,6 +49,8 @@ type Daemon struct {
 	paused                         bool // whether playback is paused
 	muted                          bool
 	volume                         int    // 0-100, applied to mpv whenever it changes
+	eqPreset                       string // built-in preset name or Custom
+	eqCustom                       audio.EqualizerBands
 	state                          string // idle, loading, reconnecting, playing, paused, failed
 	lastError                      string
 	retries                        int
@@ -91,6 +95,10 @@ type Status struct {
 	Volume int    `json:"volume"`           // 0-100
 	// Muted reports whether mpv output is silenced.
 	Muted bool `json:"muted"`
+	// EQPreset is the active built-in preset name or Custom.
+	EQPreset string `json:"eq_preset"`
+	// EQBands contains the ten currently audible gains in decibels.
+	EQBands audio.EqualizerBands `json:"eq_bands"`
 	// State is idle, loading, reconnecting, playing, paused, ended, or failed.
 	State string `json:"state"`
 	// Error describes the latest playback failure.
@@ -225,6 +233,10 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.volumeCmd(arg)
 	case "mute":
 		return d.mute()
+	case "eq":
+		return d.equalizerCmd(arg)
+	case "eq-state":
+		return d.equalizerStateCmd(arg)
 	case "reload":
 		return d.reload()
 	case "sleep":
@@ -273,6 +285,7 @@ func (d *Daemon) startPlayback() error {
 		return err
 	}
 	d.player = p
+	p.setEqualizer(d.equalizer().activeBands())
 	if d.episode != nil && d.speed != 0 && d.speed != 1 {
 		if err := p.command("set_property", "speed", d.speed); err != nil {
 			p.close()
@@ -519,10 +532,81 @@ func (d *Daemon) setVolume(n int) string {
 		}
 	}
 	d.volume = n
-	if err := writeJSON(volumePath(), playbackSettings{Volume: n}); err != nil {
+	if err := savePlaybackSettings(d.playbackSettings()); err != nil {
 		return fail("volume changed, but could not save it: " + err.Error())
 	}
 	return ok(fmt.Sprintf("volume: %d", d.volume))
+}
+
+func (d *Daemon) equalizer() equalizerConfig {
+	return normalizeEqualizerConfig(equalizerConfig{Preset: d.eqPreset, Custom: d.eqCustom})
+}
+
+func (d *Daemon) playbackSettings() playbackSettings {
+	settings := playbackSettings{Volume: d.volume}
+	settings.setEqualizer(d.equalizer())
+	return settings
+}
+
+func (d *Daemon) setEqualizer(next equalizerConfig) string {
+	next = normalizeEqualizerConfig(next)
+	settings := playbackSettings{Volume: d.volume}
+	settings.setEqualizer(next)
+	if err := savePlaybackSettings(settings); err != nil {
+		return fail("EQ unchanged because it could not be saved: " + err.Error())
+	}
+	d.eqPreset, d.eqCustom = next.Preset, next.Custom
+	if d.player != nil {
+		d.player.setEqualizer(next.activeBands())
+	}
+	return ok(formatEqualizer(next))
+}
+
+func (d *Daemon) equalizerCmd(arg string) string {
+	if strings.EqualFold(strings.TrimSpace(arg), "list") {
+		return ok(equalizerPresetList())
+	}
+	next, changed, err := updateEqualizerConfig(d.equalizer(), arg)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if !changed {
+		return ok(formatEqualizer(next))
+	}
+	return d.setEqualizer(next)
+}
+
+func (d *Daemon) equalizerStateCmd(arg string) string {
+	var state equalizerWireState
+	if err := json.Unmarshal([]byte(arg), &state); err != nil {
+		return fail("invalid EQ state: " + err.Error())
+	}
+	if strings.TrimSpace(state.Preset) == "" {
+		return fail("invalid EQ state: missing preset")
+	}
+	if len(state.Custom) != audio.EqualizerBandCount {
+		return fail(fmt.Sprintf("invalid EQ state: expected %d bands", audio.EqualizerBandCount))
+	}
+	var custom audio.EqualizerBands
+	for i, gain := range state.Custom {
+		if math.IsNaN(gain) || math.IsInf(gain, 0) || gain < audio.EqualizerMinGain || gain > audio.EqualizerMaxGain {
+			return fail("invalid EQ state: band gain out of range")
+		}
+		custom[i] = gain
+	}
+	presetName := customEqualizerPreset
+	if !strings.EqualFold(strings.TrimSpace(state.Preset), customEqualizerPreset) {
+		preset, ok := equalizerPresetByName(state.Preset)
+		if !ok {
+			return fail("invalid EQ state: unknown preset")
+		}
+		presetName = preset.Name
+	}
+	next := equalizerConfig{Preset: presetName, Custom: custom}
+	if next == d.equalizer() {
+		return ok(formatEqualizer(next))
+	}
+	return d.setEqualizer(next)
 }
 
 // mute silences playback without losing the level it returns to.
@@ -597,6 +681,8 @@ func (d *Daemon) status() string {
 		Paused:       d.paused,
 		Volume:       d.volume,
 		Muted:        d.muted,
+		EQPreset:     d.equalizer().Preset,
+		EQBands:      d.equalizer().activeBands(),
 		State:        d.state,
 		Error:        d.lastError,
 		Retries:      d.retries,
@@ -641,7 +727,12 @@ func runDaemon() {
 	if err := loadUserStations(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 	}
-	d := &Daemon{volume: rememberedVolume(), state: "idle"}
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "playback state: %v\n", err)
+		settings = defaultPlaybackSettings()
+	}
+	d := &Daemon{volume: settings.Volume, eqPreset: settings.EQPreset, eqCustom: settings.EQBands, state: "idle"}
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start daemon: %v\n", err)
 		os.Exit(1)

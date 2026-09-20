@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willibrandon/chill/internal/audio"
 )
 
 func stereoFixture(t *testing.T, seconds int) string {
@@ -115,6 +117,39 @@ func TestPCMIntegration(t *testing.T) {
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("decoder failure was not reported")
+		}
+	})
+	t.Run("post-equalizer-tap", func(t *testing.T) {
+		p, err := startPCMPlayer(55, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.close()
+		var bands audio.EqualizerBands
+		bands[4] = -12
+		p.setEqualizer(bands)
+		if err := p.command("loadfile", stereoFixture(t, 4), "replace"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case event := <-p.events():
+			if !event.loaded {
+				t.Fatalf("PCM failed to load: %+v", event)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("equalized PCM output did not load")
+		}
+		pcm := p.(*pcmPlayer)
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			frame := pcm.audioFrame()
+			if frame.Sequence > 0 && frame.Peak[0] < 0.25 && frame.Peak[1] > 0.16 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("tap did not receive equalized PCM: peak=%v", frame.Peak)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
 	})
 }

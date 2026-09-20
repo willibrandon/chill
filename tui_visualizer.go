@@ -23,7 +23,7 @@ type replVisualizer struct {
 }
 
 func (t *tui) visualizerHeight() int {
-	if !t.viz.enabled || t.help || t.podcasts.open || t.height < 10 || t.width < 20 {
+	if !t.viz.enabled || t.help || t.eq.open || t.podcasts.open || t.height < 10 || t.width < 20 {
 		return 0
 	}
 	if t.viz.fullscreen {
@@ -151,6 +151,9 @@ func (t *tui) visualizerKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "f3":
 		return t.openPodcasts("")
+	case "f4":
+		t.openEqualizer()
+		return nil
 	case "ctrl+q":
 		return tea.Quit
 	case "ctrl+c":
@@ -185,7 +188,7 @@ func (t *tui) visualizerKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (t *tui) visualizerView(height int) string {
 	v := &t.viz
-	heading := fmt.Sprintf(" %s · %d/%d · source audio", visualizer.Modes[v.mode], v.mode+1, len(visualizer.Modes))
+	heading := fmt.Sprintf(" %s · %d/%d · post-EQ audio", visualizer.Modes[v.mode], v.mode+1, len(visualizer.Modes))
 	if v.focused && !v.fullscreen {
 		heading += " · v next · V full · Esc prompt"
 	}

@@ -77,6 +77,31 @@ func TestSuggestVolArgument(t *testing.T) {
 	}
 }
 
+// TestSuggestEqualizerArguments checks presets with spaces and band completion.
+func TestSuggestEqualizerArguments(t *testing.T) {
+	matches := suggest("eq bass")
+	if len(matches) != 1 || matches[0].text != "Bass Boost" {
+		t.Fatalf("suggest preset = %+v, want Bass Boost", matches)
+	}
+	if got := acceptSuggestion("eq bass", matches[0]); got != "eq Bass Boost" {
+		t.Fatalf("accepted preset = %q", got)
+	}
+
+	matches = suggest("eq --band 1")
+	var found bool
+	for _, match := range matches {
+		if match.text == "1k" {
+			found = true
+			if got := acceptSuggestion("eq --band 1", match); got != "eq --band 1k " {
+				t.Fatalf("accepted band = %q", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("frequency suggestions missing 1k: %+v", matches)
+	}
+}
+
 // TestSuggestDoctor checks diagnostic options and their arguments.
 func TestSuggestDoctor(t *testing.T) {
 	for _, tt := range []struct {
@@ -152,6 +177,7 @@ func TestAcceptSuggestion(t *testing.T) {
 		{"first word", "pl", suggestion{text: "play"}, "play"},
 		{"argument", "play sl", suggestion{text: "sleep"}, "play sleep"},
 		{"takes argument", "pl", suggestion{text: "play", takes: true}, "play "},
+		{"multiword replacement", "eq bass", suggestion{text: "Bass Boost", replace: "eq Bass Boost"}, "eq Bass Boost"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

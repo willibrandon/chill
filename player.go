@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/willibrandon/chill/internal/audio"
 )
 
 type playerEvent struct {
@@ -23,6 +25,7 @@ type playerEvent struct {
 // exercise reconnects without a network stream or an audio device.
 type player interface {
 	command(...any) error
+	setEqualizer(audio.EqualizerBands)
 	events() <-chan playerEvent
 	close()
 }

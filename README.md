@@ -75,6 +75,10 @@ chill speed 1.5         # podcast playback speed
 chill --skip            # skip to random station
 chill --toggle          # pause/resume, or play the default station when stopped
 chill --vol 60          # set volume (also +5, -10, up, down)
+chill eq Rock           # select an equalizer preset
+chill eq --band 1k +3   # edit one band and switch to Custom
+chill eq list           # list every built-in preset
+chill --eq Rock --fg    # start foreground playback with a preset
 chill --mute            # toggle mute
 chill --status          # show what's playing
 chill --status --json   # show status as JSON
@@ -101,22 +105,24 @@ chill runs mpv in the background, so music keeps playing when you close the
 terminal. You can control it from another terminal.
 
 ```text
-yt-dlp resolves → FFmpeg decodes → daemon PCM pipe → mpv audio output
-                                       │
-                                  bounded audio tap
-                                       │
-                                  FFT / stereo levels
-                                       │
-CLI/REPL ←── control IPC ──→ daemon ── snapshots ──→ REPL visualizer
+yt-dlp resolves → FFmpeg decodes → 10-band EQ → daemon PCM pipe → mpv audio output
+                                           │
+                                      bounded audio tap
+                                           │
+                                      FFT / stereo levels
+                                           │
+CLI/REPL ←── control IPC ──→ daemon ───── snapshots ──→ REPL visualizer
 ```
 
 After an update, the next control command restarts an older daemon and restores
-your playback settings. Volume is saved between sessions.
+your playback settings. Volume, the active EQ preset, and your Custom curve are
+saved between sessions.
 
 The daemon decodes one stream into 48 kHz stereo PCM. Visualizers analyze the
-same samples sent to playback; they do not open another network stream or capture
-system audio. FFT work runs only while a REPL is subscribed. `doctor` checks the
-new FFmpeg dependency as well as mpv, yt-dlp, and the YouTube JavaScript runtime.
+post-EQ samples sent to playback; they do not open another network stream or
+capture system audio. FFT work runs only while a REPL is subscribed. `doctor`
+checks the new FFmpeg dependency as well as mpv, yt-dlp, and the YouTube
+JavaScript runtime.
 
 If a stream disconnects, chill keeps reconnecting with increasing delays, capped
 at 30 seconds. `--status` and the REPL show the retry count and countdown; JSON
@@ -195,7 +201,29 @@ Quitting also cancels diagnostics; music keeps playing.
 | `F1` | help |
 | `F2` | open/focus the visualizer; return to the prompt when focused |
 | `F3` | open podcasts or return to the prompt |
+| `F4` | open the equalizer or return to the prompt |
 | `Ctrl+Q` | quit, music keeps playing |
+
+### Equalizer
+
+The ten-band parametric equalizer covers 70 Hz, 180 Hz, 320 Hz, 600 Hz, 1 kHz,
+3 kHz, 6 kHz, 12 kHz, 14 kHz, and 16 kHz. It includes Flat, Rock, Pop, Jazz,
+Classical, Bass Boost, Treble Boost, Vocal, Electronic, Acoustic, Hip-Hop, R&B,
+Loudness, Late Night, Podcast, and Small Speakers presets, plus Custom.
+
+Press **F4** for the full-screen editor. Use **←/→** (or **h/l**) to choose a
+band, **↑/↓** (or **k/j**) to change it by 1 dB, **0** to zero it, **e/E** to
+cycle presets, **r** for Flat, and **c** to restore your saved Custom curve.
+Edits apply to live radio or podcast audio without restarting playback. The
+Custom curve survives restarts and remains saved while you audition presets.
+
+The same controls are scriptable: `chill eq` reports the curve,
+`chill eq <preset>` selects one, and `chill eq --band <0-9|frequency> <-12..12>`
+edits a band. Preset names are case-insensitive; spaces may be written as
+hyphens, as in `Bass-Boost`.
+
+See [Equalizer architecture](docs/equalizer.md) for the signal path, state, and
+live-update design.
 
 ### Podcasts
 
@@ -220,7 +248,9 @@ Use `viz led` to pick a mode, `viz list` to see them all, or `viz off` to close.
 
 ## Foreground Mode
 
-Use `--fg` to run in the terminal with mpv controls:
+Use `--fg` to run the same PCM and equalizer pipeline in the terminal without a
+daemon. The active preset and Custom curve carry between foreground and daemon
+sessions.
 
 | Key | Action |
 |-----|--------|
@@ -228,6 +258,11 @@ Use `--fg` to run in the terminal with mpv controls:
 | `m` | mute |
 | `9` / `0` | volume down / up |
 | `←` / `→` | seek |
+| `h` / `l` | select EQ band |
+| `j` / `k` | decrease / increase the selected band |
+| `x` | zero the selected band |
+| `e` / `E` | next / previous preset |
+| `r` / `c` | Flat / saved Custom curve |
 
 ## Build and test
 

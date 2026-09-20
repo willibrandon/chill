@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/willibrandon/chill/internal/audio"
 )
 
 // TestDaemonUpgradeCompatibility checks which version pairs require a daemon replacement.
@@ -63,15 +65,18 @@ func TestLegacyPlaybackSnapshot(t *testing.T) {
 func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {
 	d := fakeDaemon(t)
 	starts := 0
+	var restoredPlayer *fakePlayer
 	d.newPlayer = func(volume int, muted, paused bool) (player, error) {
 		starts++
 		if volume != 31 || !muted || !paused {
 			t.Errorf("mpv started with volume=%d muted=%v paused=%v", volume, muted, paused)
 		}
-		return &fakePlayer{event: make(chan playerEvent, 8)}, nil
+		restoredPlayer = &fakePlayer{event: make(chan playerEvent, 8)}
+		return restoredPlayer, nil
 	}
 	deadline := time.Now().Add(time.Hour)
-	snapshot := playbackSnapshot{Station: findStation("sleep"), Volume: 31, Muted: true, Paused: true, SleepUntil: deadline}
+	bands := audio.EqualizerBands{1, 2, 3, 4, 5, 4, 3, 2, 1, 0}
+	snapshot := playbackSnapshot{Station: findStation("sleep"), Volume: 31, EQPreset: customEqualizerPreset, EQBands: bands, Muted: true, Paused: true, SleepUntil: deadline}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +84,7 @@ func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {
 	wantReply(t, d.execute("restore", string(data)), true, "restored")
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if starts != 1 || !d.paused || !d.muted || d.station.Name != "sleep" || d.sleepUntil.Sub(deadline).Abs() > 10*time.Millisecond {
+	if starts != 1 || !d.paused || !d.muted || d.station.Name != "sleep" || d.sleepUntil.Sub(deadline).Abs() > 10*time.Millisecond || d.eqPreset != customEqualizerPreset || restoredPlayer.eq != bands {
 		t.Fatalf("playback state not preserved: starts=%d paused=%v muted=%v station=%v sleep=%v", starts, d.paused, d.muted, d.station, d.sleepUntil)
 	}
 }

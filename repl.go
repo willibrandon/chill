@@ -30,6 +30,7 @@ var replCommands = []replCommand{
 	{"resume", "", "resume playback"},
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
+	{"eq", "[preset|--band N dB|list]", "show or edit the 10-band equalizer (F4)"},
 	{"viz", "[mode|off|list]", "show or select a REPL visualizer (F2 to focus)"},
 	{"podcasts", "[command|feed-url]", "browse podcasts (F3; --help for commands)"},
 	{"seek", "<seconds>", "jump within an episode (-30, +30, 2m)"},
@@ -56,6 +57,7 @@ type suggestion struct {
 	desc    string // shown next to it
 	station bool   // a station name rather than a command
 	takes   bool   // an argument follows, so accepting it adds a space
+	replace string // complete replacement for suggestions containing spaces
 }
 
 // suggest returns what could complete the word at the end of input. Nothing
@@ -94,6 +96,35 @@ func suggest(input string) []suggestion {
 			{text: "down", desc: "a notch quieter"},
 		}
 
+	case strings.EqualFold(words[0], "eq"):
+		arg := strings.TrimSpace(input[len(words[0]):])
+		bandFields := strings.Fields(arg)
+		if len(bandFields) > 0 && strings.EqualFold(bandFields[0], "--band") {
+			if len(bandFields) == 1 || len(bandFields) == 2 && !typingNewWord {
+				if len(bandFields) == 2 {
+					prefix = bandFields[1]
+				}
+				for i, label := range equalizerBandLabels {
+					candidates = append(candidates, suggestion{
+						text: label, desc: fmt.Sprintf("band %d · %sHz", i, label), takes: true,
+						replace: "eq --band " + label,
+					})
+				}
+			}
+		} else {
+			prefix = arg
+			for _, preset := range equalizerPresets {
+				candidates = append(candidates, suggestion{text: preset.Name, desc: "EQ preset", replace: "eq " + preset.Name})
+			}
+			candidates = append(candidates,
+				suggestion{text: customEqualizerPreset, desc: "saved custom curve", replace: "eq " + customEqualizerPreset},
+				suggestion{text: "list", desc: "list EQ presets", replace: "eq list"},
+				suggestion{text: "next", desc: "next EQ preset", replace: "eq next"},
+				suggestion{text: "prev", desc: "previous EQ preset", replace: "eq prev"},
+				suggestion{text: "--band", desc: "edit one EQ band", takes: true, replace: "eq --band"},
+			)
+		}
+
 	case strings.EqualFold(words[0], "viz") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
 		if len(words) == 2 {
 			prefix = words[1]
@@ -124,7 +155,7 @@ func suggest(input string) []suggestion {
 
 	var matches []suggestion
 	for _, c := range candidates {
-		if strings.HasPrefix(c.text, strings.ToLower(prefix)) {
+		if strings.HasPrefix(strings.ToLower(c.text), strings.ToLower(prefix)) {
 			matches = append(matches, c)
 		}
 	}
@@ -202,6 +233,12 @@ func stationSuggestions() []suggestion {
 
 // acceptSuggestion replaces the word at the end of input with the suggestion.
 func acceptSuggestion(input string, s suggestion) string {
+	if s.replace != "" {
+		if s.takes {
+			return strings.TrimRight(s.replace, " ") + " "
+		}
+		return s.replace
+	}
 	start := strings.LastIndex(input, " ") + 1
 	if s.takes {
 		return input[:start] + s.text + " "
@@ -262,6 +299,9 @@ func execute(input string) (string, error) {
 
 	case "status":
 		out, err = clientStatus()
+
+	case "eq":
+		out, err = clientEqualizer(arg)
 
 	case "doctor":
 		var report strings.Builder

@@ -22,7 +22,7 @@ const (
 
 // Frame is an immutable, bounded snapshot. Levels are linear full-scale values;
 // spectrum bands are logarithmically spaced from 30 Hz to 20 kHz. The tap is
-// pre-volume: these are source levels, not an estimate of speaker loudness.
+// post-equalizer and pre-volume, not an estimate of speaker loudness.
 type Frame struct {
 	// Sequence identifies the latest PCM block in this snapshot.
 	Sequence uint64 `json:"sequence"`

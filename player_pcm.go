@@ -22,6 +22,7 @@ type pcmPlayer struct {
 	output    *mpvPlayer
 	pipe      *os.File
 	buffer    audio.Buffer
+	equalizer *audio.Equalizer
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -61,13 +62,17 @@ func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite b
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &pcmPlayer{output: output, pipe: write, ctx: ctx, cancel: cancel,
 		offset: offset, finite: finite,
-		done: make(chan struct{}), ready: make(chan struct{}), event: make(chan playerEvent, 8), watchDone: make(chan struct{})}
+		equalizer: audio.NewEqualizer(audio.SampleRate),
+		done:      make(chan struct{}), ready: make(chan struct{}), event: make(chan playerEvent, 8), watchDone: make(chan struct{})}
 	go p.watch()
 	return p, nil
 }
 
 func (p *pcmPlayer) events() <-chan playerEvent { return p.event }
 func (p *pcmPlayer) audioFrame() audio.Frame    { return p.buffer.Snapshot() }
+func (p *pcmPlayer) setEqualizer(bands audio.EqualizerBands) {
+	p.equalizer.SetBands(bands)
+}
 func (p *pcmPlayer) position() time.Duration {
 	return p.offset + time.Duration(p.output.positionNS.Load())
 }
@@ -134,6 +139,7 @@ func (p *pcmPlayer) close() {
 		p.pipe.Close() // unblocks a write even when output is paused
 		p.output.close()
 		<-p.watchDone
+		close(p.event)
 		if p.loaded {
 			<-p.done
 		}
@@ -242,6 +248,7 @@ func (p *pcmPlayer) decode(source string) error {
 		n, readErr := io.ReadFull(stdout, block[:])
 		if n > 0 {
 			n -= n % 8
+			p.equalizer.Process(block[:n])
 			if _, copyErr = p.pipe.Write(block[:n]); copyErr != nil {
 				break
 			}

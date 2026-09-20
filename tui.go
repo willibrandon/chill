@@ -29,7 +29,7 @@ const (
 	minPaletteLines = 8    // terminal height below which suggestions are hidden
 	maxTranscript   = 1000 // lines kept in the transcript
 
-	banner = "chill  type a station or command · F2 visualizer · F3 podcasts · F1 help"
+	banner = "chill  type a station or command · F2 visualizer · F3 podcasts · F4 equalizer · F1 help"
 )
 
 var (
@@ -101,6 +101,7 @@ type tui struct {
 	help         bool           // the help screen is showing
 	helpView     viewport.Model // scrolls the help screen
 	viz          replVisualizer
+	eq           replEqualizer
 	podcasts     podcastBrowser
 	podcastStart *string
 }
@@ -131,6 +132,7 @@ func newTUI() *tui {
 		input:    input,
 		history:  h,
 		histPos:  len(h.lines),
+		eq:       replEqualizer{config: defaultEqualizerConfig()},
 	}
 	t.viewport.MouseWheelDelta = 3
 	t.helpView.SoftWrap = true
@@ -180,6 +182,8 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return t.podcastResult(msg)
 	case visualizerConnectedMsg, visualizerFrameMsg, visualizerRetryMsg:
 		return t.visualizerMessage(msg)
+	case equalizerResultMsg:
+		return t.equalizerResult(msg)
 	case tea.WindowSizeMsg:
 		rewrap := msg.Width != t.width
 		t.width, t.height = msg.Width, msg.Height
@@ -301,6 +305,9 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		if t.viz.focused && !t.help {
 			return nil
 		}
+		if t.eq.open {
+			return nil
+		}
 		var cmd tea.Cmd
 		if t.help {
 			t.helpView, cmd = t.helpView.Update(msg)
@@ -310,7 +317,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		if t.help || t.viz.focused || t.podcasts.open {
+		if t.help || t.viz.focused || t.eq.open || t.podcasts.open {
 			return nil
 		}
 		return t.mouse(msg.(tea.MouseMsg))
@@ -318,6 +325,9 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		if t.podcasts.open {
 			return t.podcastKey(msg)
+		}
+		if t.eq.open {
+			return t.equalizerKey(msg)
 		}
 		if t.help {
 			return t.helpKey(msg)
@@ -346,6 +356,9 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "f3":
 		return t.openPodcasts("")
+	case "f4":
+		t.openEqualizer()
+		return nil
 	case "f2":
 		t.visualizerCommand("")
 		return nil
@@ -465,6 +478,9 @@ func (t *tui) helpKey(msg tea.KeyPressMsg) tea.Cmd {
 		t.cancelCommand()
 	case "f1", "esc":
 		t.help = false
+	case "f4":
+		t.help = false
+		t.openEqualizer()
 	case "pgup":
 		t.helpView.PageUp()
 	case "pgdown":
@@ -499,6 +515,10 @@ func (t *tui) submit() tea.Cmd {
 	}
 	if words[0] == "viz" {
 		t.visualizerCommand(strings.Join(words[1:], " "))
+		return nil
+	}
+	if words[0] == "eq" && len(words) == 1 {
+		t.openEqualizer()
 		return nil
 	}
 
@@ -569,6 +589,15 @@ func (t *tui) shutdown() {
 	t.closeVisualizer()
 	if t.task != nil {
 		t.task.stop()
+	}
+	equalizerWasSaving := t.eq.sending
+	if equalizerWasSaving && t.eq.done != nil {
+		// Let the serialized write finish before storing the final curve; this
+		// also retries a transient failure without letting an older write land last.
+		<-t.eq.done
+	}
+	if equalizerWasSaving && t.eq.config.Preset != "" {
+		_ = clientSetEqualizerState(t.eq.config)
 	}
 }
 
@@ -781,6 +810,9 @@ func (t *tui) View() tea.View {
 	if t.podcasts.open {
 		return t.podcastView()
 	}
+	if t.eq.open {
+		return t.equalizerView()
+	}
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -906,10 +938,12 @@ func (t *tui) statusBar() string {
 		facts = append([]string{t.spinner.View() + " " + action + t.active + "..."}, facts...)
 	}
 
-	hints := []string{"F2 visualizer", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
+	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
 	case t.podcasts.open:
 		hints = []string{"F3 prompt", "Ctrl+Q quit"}
+	case t.eq.open:
+		hints = []string{"e preset", "←/→ band", "↑/↓ gain", "F4 prompt", "Ctrl+Q quit"}
 	case t.viz.focused:
 		hints = []string{"v next", "V fullscreen", "Esc prompt", "o off", "Ctrl+Q quit"}
 	case t.sel.active && t.sel.lines:
@@ -949,6 +983,7 @@ func (t *tui) statusBar() string {
 func helpBody() string {
 	keys := [][2]string{
 		{"F3", "open podcasts or return to the prompt"},
+		{"F4", "open the ten-band equalizer or return to the prompt"},
 		{"F2", "focus the visualizer (Esc returns to the prompt)"},
 		{"v / V", "next visualizer / fullscreen while visualizer is focused"},
 		{"Tab", "complete with the highlighted suggestion"},
