@@ -7,11 +7,13 @@ go build
 vhs vhs/readme.tape
 ```
 
-`readme.tape` writes `assets/chill.png` at 1200 × 640, used by the README.
+`readme.tape` writes `assets/chill.png` at 1200 × 720, used by the README. It shows
+the station list, a live spectrum visualizer, and command suggestions together.
 
-It drives the real REPL, so it needs mpv and yt-dlp, plays chillhop for about twenty seconds, and
-stops it again. The commands it types end up in your REPL history. The pause before `status` is
-there so the uptime doesn't read `0s`.
+It drives the real REPL, so it needs mpv, FFmpeg and yt-dlp. It plays chillhop,
+waits for live spectrum data, then stops playback after the screenshot. This
+changes the current daemon's station, and the commands it types end up in your
+REPL history. The pause before `status` gives playback a few seconds of uptime.
 
-On Windows VHS runs bash from WSL, which starts the Windows `chill.exe`. On Linux or macOS change
-`./chill.exe` to `./chill` in the tape.
+The tape selects `./chill` on Linux/macOS, or `./chill.exe` when run from WSL
+with a Windows build.

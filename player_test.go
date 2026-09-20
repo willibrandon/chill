@@ -68,14 +68,11 @@ func TestMPVProtocolInterleavedEventsAndReplies(t *testing.T) {
 	}
 }
 
-// This uses a generated local WAV and mpv's null audio output. Opt in so the
-// ordinary unit suite also runs on machines without mpv or an audio device.
+// This uses a generated local WAV and mpv's null audio output. It runs with the
+// normal suite and requires mpv, but no network or audio device.
 func TestMPVIntegration(t *testing.T) {
-	if os.Getenv("CHILL_TEST_MPV") != "1" {
-		t.Skip("set CHILL_TEST_MPV=1 to exercise the installed mpv")
-	}
 	if _, err := exec.LookPath("mpv"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("playback tests require mpv: %v; install with %s", err, strings.Join(installCommands([]string{"mpv"}), "; "))
 	}
 	dir := t.TempDir()
 	t.Setenv("MPV_HOME", dir)
@@ -100,7 +97,7 @@ func TestMPVIntegration(t *testing.T) {
 	if err := os.WriteFile(path, wav, 0600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := startPlayer(55, false, false)
+	p, err := startMPV(55, false, false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +120,7 @@ func TestMPVIntegration(t *testing.T) {
 	}
 	// An independent IPC connection verifies actual mpv state, rather than
 	// trusting the acknowledgements or the daemon's own cached fields.
-	endpoint := playerEndpoint(p.(*mpvPlayer).dir)
+	endpoint := playerEndpoint(p.dir)
 	conn, err := dialPlayer(endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +177,7 @@ func TestMPVIntegration(t *testing.T) {
 	}
 	p.close()
 	select {
-	case <-p.(*mpvPlayer).exited:
+	case <-p.exited:
 	default:
 		t.Fatal("mpv still running after close")
 	}

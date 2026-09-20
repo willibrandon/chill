@@ -84,6 +84,8 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 	extractor := findYtdl(mpv)
 	r.program(ctx, "mpv", mpv)
 	r.program(ctx, "yt-dlp", extractor)
+	ffmpeg, _ := exec.LookPath("ffmpeg")
+	r.program(ctx, "ffmpeg", ffmpeg)
 	if deno, _ := exec.LookPath("deno"); deno != "" {
 		r.program(ctx, "deno", deno)
 	} else {
@@ -196,7 +198,11 @@ func (r *doctorReport) program(ctx context.Context, name, path string) {
 		r.check("FAIL", name, "not found; install with `"+strings.Join(installCommands([]string{name}), "` then `")+"`")
 		return
 	}
-	stdout, stderr, err := diagnosticCommandContext(ctx, path, 5*time.Second, "--version")
+	flag := "--version"
+	if name == "ffmpeg" {
+		flag = "-version"
+	}
+	stdout, stderr, err := diagnosticCommandContext(ctx, path, 5*time.Second, flag)
 	if ctx.Err() != nil {
 		return
 	}

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/willibrandon/chill/internal/visualizer"
 )
 
 // replCommand describes a REPL command for help and suggestions.
@@ -27,6 +29,7 @@ var replCommands = []replCommand{
 	{"resume", "", "resume playback"},
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
+	{"viz", "[mode|off|list]", "show or select a REPL visualizer (F2 to focus)"},
 	{"doctor", "[options]", "check setup and streams (--help for options)"},
 	{"cancel", "", "cancel diagnostics and discard queued commands"},
 	{"list", "", "list all stations"},
@@ -83,6 +86,17 @@ func suggest(input string) []suggestion {
 		candidates = []suggestion{
 			{text: "up", desc: "a notch louder"},
 			{text: "down", desc: "a notch quieter"},
+		}
+
+	case strings.EqualFold(words[0], "viz") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, name := range visualizer.Modes {
+			candidates = append(candidates, suggestion{text: name, desc: "visualizer"})
+		}
+		for _, name := range []string{"off", "on", "next", "prev", "list", "fullscreen"} {
+			candidates = append(candidates, suggestion{text: name, desc: "visualizer control"})
 		}
 
 	case strings.EqualFold(words[0], "doctor"):

@@ -54,7 +54,7 @@ func TestDoctorMissingDependencies(t *testing.T) {
 	if err := runDoctor(nil, &out); err == nil {
 		t.Fatal("missing dependencies should fail doctor")
 	}
-	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "no daemon running"} {
+	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", strings.Join(installCommands([]string{"ffmpeg"}), "` then `"), "no daemon running"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in %s", want, out.String())
 		}

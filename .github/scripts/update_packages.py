@@ -57,6 +57,9 @@ def update_homebrew(text, version, checksums):
     if version_tuple(versions[0]) > version_tuple(version):
         return text
     updated = replace_once(r'^  version "[^"]+"$', f'  version "{version}"', text)
+    if not re.search(r'^  depends_on "ffmpeg"$', updated, re.MULTILINE):
+        updated = replace_once(r'^  depends_on "mpv"$',
+                               '  depends_on "mpv"\n  depends_on "ffmpeg"', updated)
     for target, extension in TARGETS.items():
         if target.startswith("windows_"):
             continue
@@ -75,6 +78,9 @@ def update_scoop(text, version, checksums):
     if set(manifest["architecture"]) != set(architectures):
         raise ValueError("expected Scoop x64 and ARM64 architectures")
     manifest["version"] = version
+    dependencies = manifest.setdefault("depends", [])
+    if "main/ffmpeg" not in dependencies:
+        dependencies.append("main/ffmpeg")
     for arch, target in architectures.items():
         base = f"chill_{version}_{target}"
         manifest["architecture"][arch].update({

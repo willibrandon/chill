@@ -38,10 +38,6 @@ jobs:
       - name: Build
         run: go build -v .
 
-      - name: Test
-        shell: bash
-        run: go test ./...
-
       - name: Test package release updater
         run: python -m unittest discover -s .github/scripts -p 'test_*.py'
 
@@ -49,24 +45,24 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mpv
+          sudo apt-get install -y --no-install-recommends mpv ffmpeg
 
       - name: Install mpv (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install mpv
+          brew install mpv ffmpeg
 
       - name: Install mpv (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          choco install mpv -y
+          choco install mpv ffmpeg -y
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Chocolatey changes the registry PATH, not the Actions runner's
           # environment. Export mpv's directory for subsequent steps.
           $paths = ([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')) -split ';'
           $mpvPaths = @($paths | Where-Object {
-            $_ -and ((Test-Path (Join-Path $_ 'mpv.exe')) -or (Test-Path (Join-Path $_ 'mpv.com')))
+            $_ -and ((Test-Path (Join-Path $_ 'mpv.exe')) -or (Test-Path (Join-Path $_ 'mpv.com')) -or (Test-Path (Join-Path $_ 'ffmpeg.exe')))
           } | Select-Object -Unique)
           if ($mpvPaths.Count -eq 0) { throw 'mpv installation did not add an executable directory to PATH' }
           $mpvPaths | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -79,17 +75,15 @@ jobs:
         run: |
           import shutil
           import subprocess
-          for name in ("mpv", "yt-dlp"):
+          for name in ("mpv", "yt-dlp", "ffmpeg"):
               executable = shutil.which(name)
               if executable is None:
                   raise RuntimeError(f"{name} not found on PATH")
               print(f"{name}: {executable}", flush=True)
-              subprocess.run([executable, "--version"], check=True, timeout=30)
+              subprocess.run([executable, "-version" if name == "ffmpeg" else "--version"], check=True, timeout=30)
 
-      - name: Test mpv IPC with local audio
-        env:
-          CHILL_TEST_MPV: "1"
-        run: go test -count=1 -run TestMPVIntegration -v ./...
+      - name: Test (including local audio playback)
+        run: go test -count=1 -v ./...
 
       - name: Test --list (Unix)
         if: matrix.os != 'windows-latest'

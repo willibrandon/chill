@@ -2,7 +2,7 @@
 
 Terminal lofi radio. 24/7 streams from YouTube.
 
-![chill playing chillhop, with suggestions open in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
+![chill playing chillhop with a live spectrum visualizer and command suggestions in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
 
 ## Install
 
@@ -20,21 +20,21 @@ scoop bucket add extras
 scoop install chill
 ```
 
-Both packages include mpv, yt-dlp, and Deno.
+Both packages include mpv, FFmpeg, yt-dlp, and Deno.
 
 ### Go or release binary
 
-Install [mpv](https://mpv.io/), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
+Install [mpv](https://mpv.io/), [FFmpeg](https://ffmpeg.org/), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
 and [Deno](https://deno.com/) first.
 
 macOS:
 ```bash
-brew install mpv yt-dlp deno
+brew install mpv ffmpeg yt-dlp deno
 ```
 
 Linux:
 ```bash
-sudo apt install mpv pipx
+sudo apt install mpv ffmpeg pipx
 pipx install yt-dlp
 ```
 
@@ -42,7 +42,7 @@ Also install [Deno](https://docs.deno.com/runtime/getting_started/installation/)
 
 Windows:
 ```powershell
-choco install mpv yt-dlp deno
+choco install mpv ffmpeg yt-dlp deno
 ```
 
 Then install chill:
@@ -74,7 +74,7 @@ chill --vol 60          # set volume (also +5, -10, up, down)
 chill --mute            # toggle mute
 chill --status          # show what's playing
 chill --status --json   # show status as JSON
-chill doctor            # check setup and daemon versions
+chill doctor            # check mpv, FFmpeg, yt-dlp, runtime, and daemon versions
 chill doctor --stations # check station streams
 chill doctor --stream n # check one station
 chill doctor --logs     # show startup logs
@@ -97,14 +97,22 @@ chill runs mpv in the background, so music keeps playing when you close the
 terminal. You can control it from another terminal.
 
 ```text
-+-------------+      +-------------+           +-------------+
-| chill       | <--> | daemon      | <-------> | mpv         |
-| (CLI/REPL)  | IPC  | (server)    | JSON IPC  | (playback)  |
-+-------------+      +-------------+           +-------------+
+yt-dlp resolves → FFmpeg decodes → daemon PCM pipe → mpv audio output
+                                       │
+                                  bounded audio tap
+                                       │
+                                  FFT / stereo levels
+                                       │
+CLI/REPL ←── control IPC ──→ daemon ── snapshots ──→ REPL visualizer
 ```
 
 After an update, the next control command restarts an older daemon and restores
 your playback settings. Volume is saved between sessions.
+
+The daemon decodes one stream into 48 kHz stereo PCM. Visualizers analyze the
+same samples sent to playback; they do not open another network stream or capture
+system audio. FFT work runs only while a REPL is subscribed. `doctor` checks the
+new FFmpeg dependency as well as mpv, yt-dlp, and the YouTube JavaScript runtime.
 
 If a stream disconnects, chill keeps reconnecting with increasing delays, capped
 at 30 seconds. `--status` and the REPL show the retry count and countdown; JSON
@@ -180,7 +188,42 @@ Quitting also cancels diagnostics; music keeps playing.
 | `Ctrl+C` | cancel diagnostics, otherwise clear the line (when nothing is selected) |
 | `Ctrl+L` | clear the screen |
 | `F1` | help |
+| `F2` | open/focus the visualizer; return to the prompt when focused |
 | `Ctrl+Q` | quit, music keeps playing |
+
+### Visualizers
+
+Type `viz` or press **F2** to open a compact visualizer below the transcript.
+While it has focus, **v** cycles modes, **←** goes back, and **V** toggles
+fullscreen. **Space** pauses/resumes, **Esc** returns from fullscreen and then
+to the prompt, and **o** turns visualization off. The panel keeps animating
+while you type commands. These letter shortcuts apply only when the visualizer
+has focus, so typing `vol` and station names works normally.
+
+```text
+viz spectrum        # select a mode (Tab completes names)
+viz led             # independent left/right LED peak meters
+viz fullscreen      # toggle fullscreen
+viz next            # next mode
+viz list            # list all 31 modes
+viz off             # close and unsubscribe
+```
+
+Modes: spectrum, bars, mirror, skyline, dots, peaks, ribbon, waterfall,
+spectrogram, scope, stereo-scope, wave, filled-wave, vectorscope, lissajous,
+orbit, rings, radar, spiral, particles, rain, matrix, flame, embers, pulse,
+diamonds, tunnel, starburst, led, vu, balance.
+
+The display uses live Hann-windowed FFT data with logarithmic frequency bands,
+waveforms, and independent stereo peak/RMS levels. Meters are labeled **source
+audio**: they measure decoded samples before mpv volume, mute, and user audio
+filters. LED meters include peak hold and a dBFS scale; these are sample peaks,
+not oversampled inter-sample true-peak measurements. Playback/output buffering
+can introduce a small visual lead. Paused, disconnected, and stale streams clear
+the display. Help and terminals too small for a panel suspend the subscription.
+
+See [the visualizer architecture](docs/visualizers.md) for extension points and
+lifecycle details.
 
 ## Foreground Mode
 
@@ -195,15 +238,14 @@ Use `--fg` to run in the terminal with mpv controls:
 
 ## Build and test
 
+Install mpv and FFmpeg first. The normal test suite includes real playback
+integration tests using generated local audio and null output—no audio device,
+network access, or test opt-in environment variables are needed. Missing test
+dependencies fail with installation instructions.
+
 ```bash
 go build .
 go test ./...
-```
-
-With mpv installed, run the playback integration test:
-
-```bash
-CHILL_TEST_MPV=1 go test -count=1 -run TestMPVIntegration -v ./...
 ```
 
 ## License

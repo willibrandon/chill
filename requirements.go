@@ -29,7 +29,7 @@ func (e *requirementsError) chill() string {
 	lines := []string{
 		purple + "  ~ no sound system yet ~" + reset,
 		"",
-		dim + "  chill plays through mpv and yt-dlp, and couldn't find " + strings.Join(e.missing, " or ") + "." + reset,
+		dim + "  chill uses mpv, FFmpeg and yt-dlp, and couldn't find " + strings.Join(e.missing, " or ") + "." + reset,
 		dim + "  no rush. grab " + them + " and come back, the beats will wait:" + reset,
 		"",
 	}
@@ -63,7 +63,7 @@ func installCommands(programs []string) []string {
 	return append([]string{"sudo apt install " + strings.Join(apt, " ")}, cmds...)
 }
 
-// checkRequirements returns a *requirementsError if mpv or yt-dlp is missing.
+// checkRequirements returns the programs required by the daemon's PCM pipeline.
 func checkRequirements() error {
 	var missing []string
 
@@ -73,6 +73,9 @@ func checkRequirements() error {
 	}
 	if !hasYtdl(mpv) {
 		missing = append(missing, "yt-dlp")
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		missing = append(missing, "ffmpeg")
 	}
 
 	if len(missing) == 0 {

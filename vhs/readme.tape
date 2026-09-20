@@ -1,25 +1,25 @@
 # Capture the REPL for the README.
 # Build first: go build
-# On Windows VHS runs bash from WSL, which starts the Windows binary. Elsewhere
-# change ./chill.exe to ./chill.
-# This plays chillhop for a few seconds and stops it again.
+# Uses ./chill on Unix or ./chill.exe under WSL.
+# This plays chillhop, shows its live spectrum, and stops it again.
 
 Require mpv
+Require ffmpeg
 Require yt-dlp
 
 Set Shell bash
 Set FontSize 14
 Set Width 1200
-Set Height 640
+Set Height 720
 Set Padding 20
 Set Theme "Catppuccin Mocha"
 Set WindowBar Colorful
 Set TypingSpeed 0ms
-Set Framerate 1
+Set Framerate 30
 Set WaitTimeout 60s
 
 Hide
-Type "./chill.exe -i"
+Type "if [ -x ./chill ]; then ./chill -i; else ./chill.exe -i; fi"
 Enter
 Wait+Screen /chill>/
 Show
@@ -33,7 +33,15 @@ Wait+Screen /study/
 Sleep 6s
 Type "status"
 Enter
-Wait+Screen /▶/
+Wait+Screen /chill\[chillhop\]> status/
+Sleep 500ms
+
+Type "viz spectrum"
+Enter
+Wait+Screen /spectrum · 1\/31 · source audio/
+Wait+Screen /[▁▂▃▄▅▆▇█]/
+Enter
+Wait+Screen /F2 visualizer/
 
 Type "s"
 Wait+Screen /commands/
@@ -41,7 +49,7 @@ Down 2
 Wait+Screen /Enter accepts/
 Sleep 2s
 Screenshot assets/chill.png
-Sleep 4s
+Sleep 1s
 
 Ctrl+c
 Type "stop"

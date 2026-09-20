@@ -195,7 +195,7 @@ func TestUpdateRunningExecutable(t *testing.T) {
 func TestUpdateHelperProcess(t *testing.T) {
 	url := os.Getenv("CHILL_UPDATE_HELPER")
 	if url == "" {
-		t.Skip("subprocess helper")
+		return // invoked with its environment by TestUpdateRunningExecutable
 	}
 	cleanupUpdateBackups()
 	if url == "check" {

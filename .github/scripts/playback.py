@@ -21,14 +21,14 @@ def player_pids():
         return {
             int(row[1])
             for row in csv.reader(io.StringIO(output))
-            if row and row[0].lower() in {"mpv.exe", "mpv.com"}
+            if row and row[0].lower() in {"mpv.exe", "mpv.com", "ffmpeg.exe"}
         }
     output = subprocess.check_output(["ps", "-axo", "pid=,comm="], text=True)
     return {
         int(pid)
         for line in output.splitlines()
         for pid, command in [line.strip().split(maxsplit=1)]
-        if Path(command).name == "mpv"
+        if Path(command).name in {"mpv", "ffmpeg"}
     }
 
 
@@ -52,7 +52,9 @@ def main():
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(8000)
-            wav.writeframes(bytes(16000))
+            # The PCM decoder owns media EOF; mpv's loop-file setting only
+            # applies to the legacy backend. Keep the fixture alive throughout.
+            wav.writeframes(bytes(8000 * 2 * 180))
 
         def run(*command, executable=binary):
             result = subprocess.run([str(executable), *command], env=env, capture_output=True,
@@ -194,7 +196,7 @@ def main():
                 if not remaining:
                     break
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(f"mpv processes left after stop: {remaining}")
+                    raise RuntimeError(f"audio processes left after stop: {remaining}")
                 time.sleep(0.1)
     print("CLI playback, controls, timer, and process cleanup passed", flush=True)
 

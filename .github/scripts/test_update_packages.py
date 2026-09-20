@@ -44,6 +44,7 @@ class PackageUpdateTests(unittest.TestCase):
         formula = self.formula.read_text(encoding="utf-8")
         self.assertIn('version "0.6.0"', formula)
         self.assertIn('depends_on "mpv"', formula)
+        self.assertIn('depends_on "ffmpeg"', formula)
         for target in TARGETS:
             if not target.startswith("windows_"):
                 self.assertIn(f'{target}.tar.gz"\n  sha256 "{self.hashes[target]}"', formula)
@@ -51,7 +52,7 @@ class PackageUpdateTests(unittest.TestCase):
         update_package("v0.6.0", self.checksums, self.manifest, "scoop")
         manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.6.0")
-        self.assertEqual(manifest["depends"], ["extras/mpv", "main/yt-dlp", "main/deno"])
+        self.assertEqual(manifest["depends"], ["extras/mpv", "main/yt-dlp", "main/deno", "main/ffmpeg"])
         self.assertEqual(manifest["bin"], "chill.exe")
         self.assertEqual(manifest["autoupdate"], {"hash": {"url": "$baseurl/checksums.txt"}})
         for arch, target in {"64bit": "windows_amd64", "arm64": "windows_arm64"}.items():

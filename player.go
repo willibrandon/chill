@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -46,7 +47,7 @@ type mpvPlayer struct {
 	event  chan playerEvent
 }
 
-func startPlayer(volume int, muted, paused bool) (player, error) {
+func startMPV(volume int, muted, paused bool, input io.Reader, options []string) (*mpvPlayer, error) {
 	dir, err := os.MkdirTemp("", "chill-mpv-")
 	if err != nil {
 		return nil, err
@@ -56,6 +57,8 @@ func startPlayer(volume int, muted, paused bool) (player, error) {
 		"--input-terminal=no", "--input-ipc-server="+endpoint,
 		fmt.Sprintf("--volume=%d", volume), fmt.Sprintf("--mute=%s", yesNo(muted)),
 		fmt.Sprintf("--pause=%s", yesNo(paused)))
+	cmd.Args = append(cmd.Args, options...)
+	cmd.Stdin = input
 	var diagnostics tailBuffer
 	cmd.Stderr = &diagnostics
 	tree, err := startInTree(cmd)

@@ -20,7 +20,7 @@ const defaultVolume = 70
 
 const maxRetryDelay = 30 * time.Second
 
-const daemonProtocol = 1
+const daemonProtocol = 2
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
@@ -117,6 +117,10 @@ func (d *Daemon) handle(conn net.Conn) {
 		}
 
 		cmd := strings.TrimSpace(line)
+		if cmd == "visualize" {
+			d.serveVisualizer(conn)
+			return
+		}
 		parts := strings.SplitN(cmd, " ", 2)
 		action := parts[0]
 		arg := ""
@@ -206,7 +210,7 @@ func (d *Daemon) startPlayback() error {
 	}
 	start := d.newPlayer
 	if start == nil {
-		start = startPlayer
+		start = startPCMPlayer
 	}
 	p, err := start(d.volume, d.muted, d.paused)
 	if err != nil {

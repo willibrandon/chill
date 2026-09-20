@@ -29,7 +29,7 @@ func withConfigDir(t *testing.T) string {
 
 	cfgDir, err := os.UserConfigDir()
 	if err != nil {
-		t.Skipf("no config dir: %v", err)
+		t.Fatalf("cannot create isolated test config: %v", err)
 	}
 	return filepath.Join(cfgDir, "chill", "stations.json")
 }

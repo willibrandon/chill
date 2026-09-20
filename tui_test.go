@@ -44,7 +44,7 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 		}
 	}
 	transcript := ansi.Strip(strings.Join(model.lines, "\n"))
-	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "no daemon running", "Doctor complete. Passed: 3, warnings: 1, failed: 2.", "doctor found problems"} {
+	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", "no daemon running", "Doctor complete. Passed: 3, warnings: 1, failed: 3.", "doctor found problems"} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q: %s", want, transcript)
 		}
