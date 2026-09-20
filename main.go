@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -95,6 +96,7 @@ func main() {
 	skip := flag.Bool("skip", false, "skip to random station")
 	stop := flag.Bool("stop", false, "stop playback")
 	fg := flag.Bool("fg", false, "run in foreground (no daemon)")
+	version := flag.Bool("version", false, "show version")
 
 	// options
 	station := flag.String("station", "", "station to play")
@@ -107,6 +109,8 @@ func main() {
 		runDaemon()
 	case *repl:
 		runRepl()
+	case *version:
+		fmt.Println("chill " + buildVersion())
 	case *list:
 		printStations()
 	case *status:
@@ -143,6 +147,15 @@ func main() {
 		}
 		printResult(clientPlay(s))
 	}
+}
+
+// buildVersion returns the version this binary was built from, which the go
+// command records from the module version or the git tag.
+func buildVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 // printResult prints what a command has to say, or reports its error and exits.

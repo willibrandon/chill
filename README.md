@@ -33,6 +33,8 @@ Then install chill:
 go install github.com/willibrandon/chill@latest
 ```
 
+Or grab a binary for your platform from the [releases page](https://github.com/willibrandon/chill/releases) and put it somewhere in your `PATH`.
+
 Make sure your Go bin directory is in your `PATH`:
 - macOS/Linux: `export PATH="$HOME/go/bin:$PATH"`
 - Windows: Add `%USERPROFILE%\go\bin` to your PATH
@@ -48,6 +50,7 @@ chill --toggle       # pause/resume
 chill --status       # show what's playing
 chill --stop         # stop playback
 chill --list         # show all stations
+chill --version      # show version
 chill --fg           # run in foreground (no daemon)
 ```
 
