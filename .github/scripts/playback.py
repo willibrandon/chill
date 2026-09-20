@@ -83,6 +83,19 @@ def main():
             raise RuntimeError(f"Timed out waiting for {state}: {previous}")
 
         try:
+            # Exercise the real help entry points with playback dependencies
+            # unavailable, so help remains usable before installation/setup.
+            for arguments, expected in [
+                (("--help",), ("Commands:", "doctor", "add <name>", "remove <name>",
+                               "default <name>", "upgrade", "--status --json", "--stations")),
+                (("-h",), ("Commands:", "doctor", "--status --json")),
+                (("doctor", "--help"), ("chill doctor [options]", "--stations", "--stream", "--timeout", "--logs")),
+            ]:
+                help_result = subprocess.run([str(binary), *arguments], env=dict(env, PATH=""),
+                                             capture_output=True, text=True, timeout=15)
+                help_text = help_result.stdout + help_result.stderr
+                require(help_result.returncode == 0 and all(word in help_text for word in expected),
+                        f"Incomplete help for {arguments}: {help_text}")
             stopped = json.loads(run("--status", "--json"))
             require(not stopped["running"] and stopped["state"] == "stopped",
                     f"Unexpected status before startup: {stopped}")

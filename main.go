@@ -113,6 +113,7 @@ func main() {
 	station := flag.String("station", "", "station to play")
 	vol := flag.String("vol", "", "set volume (0-100, +5, -10, up, down)")
 
+	flag.Usage = printCLIHelp
 	flag.Parse()
 	enableANSI()
 	if *jsonOutput {

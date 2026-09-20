@@ -92,6 +92,7 @@ chill default n      # choose the station played by chill
 chill --sleep 45m    # stop playback after 45 minutes
 chill --sleep off    # cancel the sleep timer
 chill --version      # show version
+chill --help         # show commands, options, and examples
 chill update         # install the latest release
 chill --fg           # run in foreground (no daemon)
 ```

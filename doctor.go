@@ -23,6 +23,7 @@ func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
 	var options doctorOptions
 	flags := flag.NewFlagSet("chill doctor", flag.ContinueOnError)
 	flags.SetOutput(out)
+	flags.Usage = func() { printDoctorHelp(flags) }
 	flags.BoolVar(&options.stations, "stations", false, "resolve every configured station without playing audio")
 	flags.StringVar(&options.stream, "stream", "", "resolve one station name or URL without playing audio")
 	flags.DurationVar(&options.timeout, "timeout", 45*time.Second, "timeout per stream check")
