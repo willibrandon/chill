@@ -8,8 +8,11 @@
 //	chill              # play default station
 //	chill chillhop     # play specific station
 //	chill -i           # interactive mode (repl)
+//	chill --vol 60     # set volume (or +5, -10, up, down)
+//	chill --mute       # toggle mute
 //	chill --status     # show what's playing
 //	chill --stop       # stop playback
+//	chill add n url    # save your own station
 package main
 
 import (

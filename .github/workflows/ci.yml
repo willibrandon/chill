@@ -25,7 +25,11 @@ jobs:
         shell: bash
         run: |
           go vet ./...
-          test -z "$(gofmt -l .)"
+          # git bash on Windows makes gofmt see CRLF in every file, so
+          # check formatting on one platform only
+          if [ "$RUNNER_OS" != Windows ]; then
+            test -z "$(gofmt -l .)"
+          fi
 
       - name: Build
         run: go build -v .
