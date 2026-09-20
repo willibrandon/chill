@@ -56,7 +56,16 @@ func sendRawCommand(cmd string) (string, error) {
 		// Wait for process exit, not just the acknowledgement. Otherwise the
 		// old daemon can unlink the replacement's socket during its cleanup.
 		if _, err := io.Copy(io.Discard, reader); err != nil {
-			return "", err
+			// Windows can reset TCP connections when os.Exit closes them.
+			// After an acknowledgement and removal of the discovery file,
+			// that reset also confirms the old daemon finished its cleanup.
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return "", err
+			}
+			if _, statErr := os.Stat(socketPath()); !os.IsNotExist(statErr) {
+				return "", err
+			}
 		}
 	}
 
