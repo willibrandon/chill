@@ -40,7 +40,7 @@ these source levels; they do not purport to measure speakers or true peaks.
 
 ## Transport and lifecycle
 
-The daemon protocol is version 2. The additive `visualize` request upgrades its
+The daemon protocol is version 3. The `visualize` request upgrades its
 connection to newline-delimited JSON snapshots (`version: 1`) at 30 Hz. It is
 read-only, uses a dedicated connection and does not start playback. A packet
 contains playback state, station generation and an `audio.Frame`.

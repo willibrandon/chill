@@ -23,7 +23,7 @@ type replVisualizer struct {
 }
 
 func (t *tui) visualizerHeight() int {
-	if !t.viz.enabled || t.help || t.height < 10 || t.width < 20 {
+	if !t.viz.enabled || t.help || t.podcasts.open || t.height < 10 || t.width < 20 {
 		return 0
 	}
 	if t.viz.fullscreen {
@@ -149,6 +149,8 @@ func (t *tui) visualizerCommand(arg string) {
 func (t *tui) visualizerKey(msg tea.KeyPressMsg) tea.Cmd {
 	v := &t.viz
 	switch msg.String() {
+	case "f3":
+		return t.openPodcasts("")
 	case "ctrl+q":
 		return tea.Quit
 	case "ctrl+c":

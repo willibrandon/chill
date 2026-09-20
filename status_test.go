@@ -10,6 +10,7 @@ import (
 	"testing"
 )
 
+// TestDoctorCompatibility checks client and daemon version descriptions.
 func TestDoctorCompatibility(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -34,6 +35,7 @@ func TestDoctorCompatibility(t *testing.T) {
 	}
 }
 
+// TestJSONStatusStoppedAndStale checks stopped and unreachable daemon responses.
 func TestJSONStatusStoppedAndStale(t *testing.T) {
 	withConfigDir(t)
 	out, err := statusJSON()
@@ -50,6 +52,7 @@ func TestJSONStatusStoppedAndStale(t *testing.T) {
 	}
 }
 
+// TestInspectionNeverUpgrades checks read-only status does not replace a daemon.
 func TestInspectionNeverUpgrades(t *testing.T) {
 	// macOS Unix socket paths must fit in 104 bytes, including the filename.
 	runtimeDir, err := os.MkdirTemp("", "ci-")

@@ -102,6 +102,7 @@ func updateServer(t *testing.T, goos string, binary []byte, problem string) *htt
 	return server
 }
 
+// TestReleaseUpdateInstallsArchive checks release download and executable replacement.
 func TestReleaseUpdateInstallsArchive(t *testing.T) {
 	for _, platform := range []string{"linux", "darwin", "windows"} {
 		t.Run(platform, func(t *testing.T) {
@@ -123,6 +124,7 @@ func TestReleaseUpdateInstallsArchive(t *testing.T) {
 	}
 }
 
+// TestFailedUpdatePreservesExecutable checks invalid releases cannot destroy an installation.
 func TestFailedUpdatePreservesExecutable(t *testing.T) {
 	for _, problem := range []string{"api failure", "checksum mismatch", "missing checksum", "missing executable", "missing asset", "prerelease"} {
 		t.Run(problem, func(t *testing.T) {
@@ -143,6 +145,7 @@ func TestFailedUpdatePreservesExecutable(t *testing.T) {
 	}
 }
 
+// TestUpdateNeverDowngradesOrReinstalls checks current and newer versions are retained.
 func TestUpdateNeverDowngradesOrReinstalls(t *testing.T) {
 	server := updateServer(t, runtime.GOOS, []byte("unexpected update"), "")
 	u := releaseUpdater{client: server.Client(), url: server.URL + "/latest", goos: runtime.GOOS, goarch: runtime.GOARCH}
@@ -162,6 +165,7 @@ func TestUpdateNeverDowngradesOrReinstalls(t *testing.T) {
 	}
 }
 
+// TestUpdateRunningExecutable checks self-replacement while the old binary is running.
 func TestUpdateRunningExecutable(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -192,6 +196,7 @@ func TestUpdateRunningExecutable(t *testing.T) {
 	}
 }
 
+// TestUpdateHelperProcess runs subprocess fixtures for the self-update test.
 func TestUpdateHelperProcess(t *testing.T) {
 	url := os.Getenv("CHILL_UPDATE_HELPER")
 	if url == "" {

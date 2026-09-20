@@ -20,25 +20,37 @@ var (
 )
 
 const (
+	// TH32CS_SNAPTHREAD requests thread records in a Toolhelp snapshot.
 	TH32CS_SNAPTHREAD = 0x00000004
 )
 
+// THREADENTRY32 matches the Windows Toolhelp thread enumeration structure.
 type THREADENTRY32 struct {
-	Size           uint32
-	Usage          uint32
-	ThreadID       uint32
+	// Size is the structure size in bytes required by the Windows API.
+	Size uint32
+	// Usage is reserved by Windows.
+	Usage uint32
+	// ThreadID identifies the enumerated thread.
+	ThreadID uint32
+	// OwnerProcessID identifies the process owning the thread.
 	OwnerProcessID uint32
-	BasePri        int32
-	DeltaPri       int32
-	Flags          uint32
+	// BasePri is the thread's base priority.
+	BasePri int32
+	// DeltaPri is reserved by Windows.
+	DeltaPri int32
+	// Flags is reserved by Windows.
+	Flags uint32
 }
 
 // JOBOBJECT_BASIC_PROCESS_ID_LIST with room for far more processes than an
 // mpv tree will ever have.
 type JOBOBJECT_BASIC_PROCESS_ID_LIST struct {
+	// NumberOfAssignedProcesses is the total number of processes in the job.
 	NumberOfAssignedProcesses uint32
-	NumberOfProcessIdsInList  uint32
-	ProcessIdList             [64]uintptr
+	// NumberOfProcessIdsInList counts valid entries in ProcessIdList.
+	NumberOfProcessIdsInList uint32
+	// ProcessIdList holds the process identifiers returned by Windows.
+	ProcessIdList [64]uintptr
 }
 
 // processTree is a process and all of its descendants, tracked with a job

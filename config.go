@@ -25,8 +25,10 @@ import (
 
 // config is the JSON document on disk.
 type config struct {
-	Stations       []Station `json:"stations"`
-	DefaultStation string    `json:"default_station,omitempty"`
+	// Stations contains custom stations and overrides of built-ins.
+	Stations []Station `json:"stations"`
+	// DefaultStation selects the station played without an explicit name.
+	DefaultStation string `json:"default_station,omitempty"`
 }
 
 var stationsMu sync.RWMutex
@@ -223,6 +225,7 @@ func saveDefaultStation(args []string) (string, error) {
 // Playback state is separate from the editable station list, so volume changes
 // never rewrite station edits. Mute is temporary and doesn't change this level.
 type playbackSettings struct {
+	// Volume is the saved output level from 0 to 100.
 	Volume int `json:"volume"`
 }
 

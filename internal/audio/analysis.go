@@ -10,22 +10,32 @@ import (
 )
 
 const (
+	// SampleRate is the stereo PCM sampling frequency in Hz.
 	SampleRate = 48000
+	// WindowSize is the sample count per channel used for the FFT.
 	WindowSize = 2048
-	Bands      = 64
-	WaveSize   = 256
+	// Bands is the number of logarithmic spectrum bands.
+	Bands = 64
+	// WaveSize is the contiguous sample count in each waveform trace.
+	WaveSize = 256
 )
 
 // Frame is an immutable, bounded snapshot. Levels are linear full-scale values;
 // spectrum bands are logarithmically spaced from 30 Hz to 20 kHz. The tap is
 // pre-volume: these are source levels, not an estimate of speaker loudness.
 type Frame struct {
-	Sequence uint64               `json:"sequence"`
-	At       time.Time            `json:"at"`
-	Spectrum [Bands]float64       `json:"spectrum"`
-	Wave     [2][WaveSize]float64 `json:"wave"`
-	Peak     [2]float64           `json:"peak"`
-	RMS      [2]float64           `json:"rms"`
+	// Sequence identifies the latest PCM block in this snapshot.
+	Sequence uint64 `json:"sequence"`
+	// At records when the latest PCM block arrived.
+	At time.Time `json:"at"`
+	// Spectrum holds linear full-scale amplitudes for frequency bands.
+	Spectrum [Bands]float64 `json:"spectrum"`
+	// Wave holds left and right waveform samples.
+	Wave [2][WaveSize]float64 `json:"wave"`
+	// Peak holds independent left and right sample-peak amplitudes.
+	Peak [2]float64 `json:"peak"`
+	// RMS holds independent left and right root-mean-square amplitudes.
+	RMS [2]float64 `json:"rms"`
 }
 
 // Buffer retains only the latest window. Push does no FFT, I/O, or allocation;

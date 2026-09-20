@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// TestMPVProtocolInterleavedEventsAndReplies checks asynchronous IPC message routing.
 func TestMPVProtocolInterleavedEventsAndReplies(t *testing.T) {
 	client, server := net.Pipe()
 	p := &mpvPlayer{conn: client, done: make(chan struct{}), reply: make(chan mpvMessage, 8), event: make(chan playerEvent, 8)}

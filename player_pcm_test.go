@@ -42,6 +42,7 @@ func stereoFixture(t *testing.T, seconds int) string {
 	return path
 }
 
+// TestPCMIntegration exercises real decoding, stereo capture, pause, and cleanup.
 func TestPCMIntegration(t *testing.T) {
 	for _, name := range []string{"mpv", "ffmpeg"} {
 		if _, err := exec.LookPath(name); err != nil {
@@ -118,6 +119,7 @@ func TestPCMIntegration(t *testing.T) {
 	})
 }
 
+// TestResolveDirectAudioAndCancellation checks direct sources and cancelled extraction.
 func TestResolveDirectAudioAndCancellation(t *testing.T) {
 	for _, source := range []string{"/music/100% chill.wav", `C:\Music\a track.wav`, "https://radio.example/stream"} {
 		got, err := resolveAudio(context.Background(), source)

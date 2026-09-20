@@ -70,10 +70,14 @@ func daemonCompatibility(s *Status, client string) (string, string) {
 // Version/protocol describe the daemon; client_* identify the invoking binary.
 type machineStatus struct {
 	Status
-	Running        bool   `json:"running"`
-	ClientVersion  string `json:"client_version"`
-	ClientProtocol int    `json:"client_protocol"`
-	Compatibility  string `json:"compatibility"`
+	// Running distinguishes a connected daemon from a stopped one.
+	Running bool `json:"running"`
+	// ClientVersion identifies the binary issuing this status request.
+	ClientVersion string `json:"client_version"`
+	// ClientProtocol is the client's supported daemon protocol.
+	ClientProtocol int `json:"client_protocol"`
+	// Compatibility describes the client/daemon version relationship.
+	Compatibility string `json:"compatibility"`
 }
 
 func statusJSON() (string, error) {

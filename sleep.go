@@ -30,8 +30,8 @@ func (d *Daemon) sleep(arg string) string {
 	if err != nil {
 		return fail(err.Error())
 	}
-	if d.station == nil || d.state == "failed" {
-		return fail("nothing playing; start a station before setting a sleep timer")
+	if d.station == nil && d.episode == nil || d.state == "failed" || d.state == "ended" {
+		return fail("nothing playing; start a station or podcast before setting a sleep timer")
 	}
 	d.cancelSleep()
 	d.sleepUntil = time.Now().Add(duration)

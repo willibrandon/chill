@@ -73,6 +73,7 @@ func (task *replTask) emit(line string) error {
 	}
 }
 
+// Write forwards complete diagnostic lines to the REPL's asynchronous output.
 func (task *replTask) Write(p []byte) (int, error) {
 	task.partial += string(p)
 	for {

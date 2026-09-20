@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// TestSpanOrdersBackwardsSelection checks reverse drags produce ordered bounds.
 func TestSpanOrdersBackwardsSelection(t *testing.T) {
 	sel := selection{anchor: point{5, 3}, cursor: point{2, 7}}
 	first, last := sel.span()
@@ -15,6 +16,7 @@ func TestSpanOrdersBackwardsSelection(t *testing.T) {
 	}
 }
 
+// TestCols checks selected column ranges across transcript rows.
 func TestCols(t *testing.T) {
 	// a drag from row 1 col 4 to row 3 col 6
 	sel := selection{anchor: point{1, 4}, cursor: point{3, 6}}
@@ -38,6 +40,7 @@ func TestCols(t *testing.T) {
 	}
 }
 
+// TestColsWholeLines checks line selection spans complete rows.
 func TestColsWholeLines(t *testing.T) {
 	sel := selection{lines: true, anchor: point{1, 2}, cursor: point{3, 9}}
 	from, to := sel.cols(2, 42)
@@ -46,6 +49,7 @@ func TestColsWholeLines(t *testing.T) {
 	}
 }
 
+// TestPaint checks highlighting preserves the selected text.
 func TestPaint(t *testing.T) {
 	got := paint("abcdef", 2, 4, styleSelection)
 	if ansi.Strip(got) != "abcdef" {
@@ -62,6 +66,7 @@ func TestPaint(t *testing.T) {
 	}
 }
 
+// TestDedent checks common indentation is removed from copied text.
 func TestDedent(t *testing.T) {
 	lines := []string{"    one", "", "  two", "    three"}
 	got := dedent(lines)
@@ -71,6 +76,7 @@ func TestDedent(t *testing.T) {
 	}
 }
 
+// TestDedentAllBlank checks copying blank rows is well-defined.
 func TestDedentAllBlank(t *testing.T) {
 	// with no indented text the shared indent is unknown, lines stay as they are
 	got := dedent([]string{"   ", " "})

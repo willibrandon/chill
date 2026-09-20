@@ -15,6 +15,7 @@ type requirementsError struct {
 	missing []string
 }
 
+// Error lists the required programs that could not be found.
 func (e *requirementsError) Error() string {
 	return strings.Join(e.missing, " and ") + " not found"
 }
@@ -42,6 +43,18 @@ func (e *requirementsError) chill() string {
 // installCommands returns how to install the given programs on this platform,
 // the same way the readme does.
 func installCommands(programs []string) []string {
+	normalized := make([]string, 0, len(programs))
+	seen := map[string]bool{}
+	for _, p := range programs {
+		if p == "ffprobe" {
+			p = "ffmpeg"
+		}
+		if !seen[p] {
+			normalized = append(normalized, p)
+			seen[p] = true
+		}
+	}
+	programs = normalized
 	switch runtime.GOOS {
 	case "windows":
 		return []string{"choco install " + strings.Join(programs, " ")}
@@ -61,6 +74,19 @@ func installCommands(programs []string) []string {
 		}
 	}
 	return append([]string{"sudo apt install " + strings.Join(apt, " ")}, cmds...)
+}
+
+func checkPodcastRequirements() error {
+	var missing []string
+	for _, name := range []string{"mpv", "ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return &requirementsError{missing}
+	}
+	return nil
 }
 
 // checkRequirements returns the programs required by the daemon's PCM pipeline.

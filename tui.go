@@ -20,6 +20,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/willibrandon/chill/internal/podcast"
 )
 
 const (
@@ -28,7 +29,7 @@ const (
 	minPaletteLines = 8    // terminal height below which suggestions are hidden
 	maxTranscript   = 1000 // lines kept in the transcript
 
-	banner = "chill  type a station or a command, tab completes.  help for more"
+	banner = "chill  type a station or command · F2 visualizer · F3 podcasts · F1 help"
 )
 
 var (
@@ -97,9 +98,11 @@ type tui struct {
 	task           *replTask
 	cancelling     bool
 
-	help     bool           // the help screen is showing
-	helpView viewport.Model // scrolls the help screen
-	viz      replVisualizer
+	help         bool           // the help screen is showing
+	helpView     viewport.Model // scrolls the help screen
+	viz          replVisualizer
+	podcasts     podcastBrowser
+	podcastStart *string
 }
 
 func newTUI() *tui {
@@ -136,7 +139,11 @@ func newTUI() *tui {
 	return t
 }
 
+// Init starts status polling and opens any requested podcast browser.
 func (t *tui) Init() tea.Cmd {
+	if t.podcastStart != nil {
+		return tea.Batch(pollStatus, t.openPodcasts(*t.podcastStart))
+	}
 	return pollStatus
 }
 
@@ -160,6 +167,7 @@ func run(line string, id uint64) tea.Cmd {
 	}
 }
 
+// Update handles a Bubble Tea message and reconciles layout and subscriptions.
 func (t *tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := t.update(msg)
 	t.fit()
@@ -168,6 +176,8 @@ func (t *tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (t *tui) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case podcastResultMsg:
+		return t.podcastResult(msg)
 	case visualizerConnectedMsg, visualizerFrameMsg, visualizerRetryMsg:
 		return t.visualizerMessage(msg)
 	case tea.WindowSizeMsg:
@@ -208,6 +218,16 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			t.print(styleError.Render("  playback: ") + strings.Join(statusFacts(msg.status), " │ "))
 		}
 		t.status = msg.status
+		if s := msg.status; s != nil && s.Episode != nil && t.podcasts.library != nil {
+			l := t.podcasts.library
+			if l.Progress == nil {
+				l.Progress = map[string]episodeProgress{}
+			}
+			l.Progress[s.Episode.Key()] = episodeProgress{Position: s.Position, Duration: s.Duration, Played: s.State == "ended", Updated: time.Now()}
+			if strings.HasPrefix(t.podcasts.note, "loading:") && s.State != "loading" && s.State != "reconnecting" {
+				t.podcasts.note = ""
+			}
+		}
 		if !msg.poll {
 			return nil
 		}
@@ -223,6 +243,13 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 	case resultMsg:
 		if msg.id != t.commandID || !t.running {
 			return nil
+		}
+		if t.podcasts.open {
+			if msg.err != nil {
+				t.podcasts.note = msg.err.Error()
+			} else if msg.out != "" {
+				t.podcasts.note = ansi.Strip(msg.out)
+			}
 		}
 		if t.task != nil {
 			t.task.cancel()
@@ -261,6 +288,16 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return refreshStatus
 
 	case tea.MouseWheelMsg:
+		if t.podcasts.open {
+			p := &t.podcasts
+			if msg.Button == tea.MouseWheelUp {
+				p.page.selected = max(0, p.page.selected-3)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				p.page.selected = min(max(0, len(p.rows())-1), p.page.selected+3)
+			}
+			return nil
+		}
 		if t.viz.focused && !t.help {
 			return nil
 		}
@@ -273,12 +310,15 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		if t.help || t.viz.focused {
+		if t.help || t.viz.focused || t.podcasts.open {
 			return nil
 		}
 		return t.mouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
+		if t.podcasts.open {
+			return t.podcastKey(msg)
+		}
 		if t.help {
 			return t.helpKey(msg)
 		}
@@ -304,6 +344,8 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	open := t.paletteOpen()
 
 	switch msg.String() {
+	case "f3":
+		return t.openPodcasts("")
 	case "f2":
 		t.visualizerCommand("")
 		return nil
@@ -446,6 +488,15 @@ func (t *tui) submit() tea.Cmd {
 	t.history.add(line)
 	t.histPos = len(t.history.lines)
 	words := strings.Fields(strings.ToLower(line))
+	if words[0] == "podcasts" || words[0] == "podcast" {
+		args := strings.Fields(line)[1:]
+		if len(args) == 0 {
+			return t.openPodcasts("")
+		}
+		if len(args) == 1 && podcast.ValidURL(args[0]) {
+			return t.openPodcasts(args[0])
+		}
+	}
 	if words[0] == "viz" {
 		t.visualizerCommand(strings.Join(words[1:], " "))
 		return nil
@@ -488,6 +539,17 @@ func (t *tui) start(line string) tea.Cmd {
 		})
 		command = t.task.next
 	}
+	if t.active == "podcasts" || t.active == "podcast" {
+		args := strings.Fields(line)[1:]
+		t.task = newREPLTask(t.commandID, func(ctx context.Context, out io.Writer) error {
+			result, err := runPodcastCommand(ctx, args)
+			if result != "" {
+				fmt.Fprintln(out, result)
+			}
+			return err
+		})
+		command = t.task.next
+	}
 	return tea.Batch(t.spinner.Tick, command)
 }
 
@@ -503,6 +565,7 @@ func (t *tui) cancelCommand() bool {
 }
 
 func (t *tui) shutdown() {
+	t.closePodcasts()
 	t.closeVisualizer()
 	if t.task != nil {
 		t.task.stop()
@@ -683,6 +746,9 @@ func (t *tui) paletteHeight() int {
 
 // promptLabel is the prompt, which shows the station that is loaded.
 func (t *tui) promptLabel() string {
+	if t.status != nil && t.status.Episode != nil {
+		return stylePrompt.Render("chill[podcast]> ")
+	}
 	if t.status == nil || t.status.Station == "" {
 		return stylePrompt.Render("chill> ")
 	}
@@ -710,7 +776,11 @@ func (t *tui) fit() {
 	t.helpView.SetHeight(max(t.height-3, 1))
 }
 
+// View renders the active REPL, help, podcast, or visualizer screen.
 func (t *tui) View() tea.View {
+	if t.podcasts.open {
+		return t.podcastView()
+	}
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -838,6 +908,8 @@ func (t *tui) statusBar() string {
 
 	hints := []string{"F2 visualizer", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
+	case t.podcasts.open:
+		hints = []string{"F3 prompt", "Ctrl+Q quit"}
 	case t.viz.focused:
 		hints = []string{"v next", "V fullscreen", "Esc prompt", "o off", "Ctrl+Q quit"}
 	case t.sel.active && t.sel.lines:
@@ -876,6 +948,7 @@ func (t *tui) statusBar() string {
 // helpBody is what the help screen shows under its heading.
 func helpBody() string {
 	keys := [][2]string{
+		{"F3", "open podcasts or return to the prompt"},
 		{"F2", "focus the visualizer (Esc returns to the prompt)"},
 		{"v / V", "next visualizer / fullscreen while visualizer is focused"},
 		{"Tab", "complete with the highlighted suggestion"},
@@ -919,8 +992,11 @@ func helpBody() string {
 }
 
 // runRepl starts the fullscreen REPL.
-func runRepl() {
+func runRepl(podcastQuery ...string) {
 	model := newTUI()
+	if len(podcastQuery) > 0 {
+		model.podcastStart = &podcastQuery[0]
+	}
 	_, err := tea.NewProgram(model).Run()
 	model.shutdown()
 	if err != nil {

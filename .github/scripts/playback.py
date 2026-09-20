@@ -3,6 +3,7 @@
 import argparse
 import csv
 import io
+import http.server
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import wave
 
@@ -187,6 +189,67 @@ def main():
                 run("remove", "ci-audio")
                 require("ci-audio" not in run("--list"), "Removed station still listed")
                 require(run("--status").startswith("playing │"), "Removal interrupted playback")
+
+                class PodcastHandler(http.server.BaseHTTPRequestHandler):
+                    def log_message(self, *args):
+                        pass
+
+                    def do_GET(self):
+                        if self.path == "/feed":
+                            host = f"http://127.0.0.1:{self.server.server_port}"
+                            body = (f'<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>'
+                                    f'<title>CI Podcast</title><item><title>First episode</title><guid>one</guid>'
+                                    f'<itunes:duration>180</itunes:duration><enclosure url="{host}/audio" type="audio/wav"/>'
+                                    f'</item><item><title>Second episode</title><guid>two</guid>'
+                                    f'<enclosure url="{host}/audio" type="audio/wav"/></item></channel></rss>').encode()
+                        else:
+                            body = audio.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+
+                server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PodcastHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                feed = f"http://127.0.0.1:{server.server_port}/feed"
+                try:
+                    episodes = json.loads(run("podcasts", "episodes", feed, "--json"))
+                    require(len(episodes["episodes"]) == 2, "Podcast feed was not parsed")
+                    run("podcasts", "subscribe", feed)
+                    subscriptions = json.loads(run("podcasts", "subscriptions", "--json"))
+                    require(subscriptions[0]["feed_url"] == feed, "Subscription was not saved")
+                    run("podcasts", "play", feed, "1")
+                    wait_for("playing")
+                    run("pause")
+                    run("seek", "+30")
+                    wait_for("paused")
+                    state = json.loads(run("status", "--json"))
+                    require(state["episode"]["guid"] == "one" and state["position"] >= 30,
+                            f"Podcast seek failed: {state}")
+                    run("speed", "1.5")
+                    run("podcasts", "queue", feed, "2")
+                    require(len(json.loads(run("podcasts", "queue", "--json"))) == 1,
+                            "Episode queue was not updated")
+                    run("next")
+                    wait_for("playing")
+                    state = json.loads(run("--status", "--json"))
+                    require(state["episode"]["guid"] == "two" and state["speed"] == 1.5,
+                            f"Queue transition lost episode/speed: {state}")
+                    run("--stop")
+                    run("podcasts", "play", feed, "1")
+                    wait_for("playing")
+                    state = json.loads(run("--status", "--json"))
+                    require(state["position"] >= 25 and state["speed"] == 1.5,
+                            f"Restart lost podcast position/speed: {state}")
+                    run("podcasts", "unsubscribe", feed)
+                    require(not json.loads(run("podcasts", "subscriptions", "--json")),
+                            "Unsubscribe did not persist")
+                    print("Podcast CLI, subscriptions, seeking, speed, and queue passed", flush=True)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join()
         finally:
             print(run("--stop"), flush=True)
             wait_for("not running")

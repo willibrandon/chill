@@ -75,12 +75,12 @@ jobs:
         run: |
           import shutil
           import subprocess
-          for name in ("mpv", "yt-dlp", "ffmpeg"):
+          for name in ("mpv", "yt-dlp", "ffmpeg", "ffprobe"):
               executable = shutil.which(name)
               if executable is None:
                   raise RuntimeError(f"{name} not found on PATH")
               print(f"{name}: {executable}", flush=True)
-              subprocess.run([executable, "-version" if name == "ffmpeg" else "--version"], check=True, timeout=30)
+              subprocess.run([executable, "-version" if name in ("ffmpeg", "ffprobe") else "--version"], check=True, timeout=30)
 
       - name: Test (including local audio playback)
         run: go test -count=1 -v ./...
