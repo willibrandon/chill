@@ -77,6 +77,10 @@ type State struct {
 	Track Track
 	// Volume is a linear level from zero through one.
 	Volume float64
+	// AudioDevice identifies the active output destination.
+	AudioDevice string
+	// AudioFormat describes the active PCM format.
+	AudioFormat string
 	// Position is the current playhead.
 	Position time.Duration
 	// Seekable reports whether playhead changes are supported.
@@ -85,14 +89,4 @@ type State struct {
 	CanGoNext bool
 	// CanGoPrevious reports whether a previous item can be selected.
 	CanGoPrevious bool
-}
-
-func cleanVolume(volume float64) float64 {
-	if volume < 0 {
-		return 0
-	}
-	if volume > 1 {
-		return 1
-	}
-	return volume
 }

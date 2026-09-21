@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -568,20 +567,6 @@ Commands:
 	default:
 		return "", fmt.Errorf("unknown playlist command %q", action)
 	}
-}
-
-func itemFromInput(ctx context.Context, input string) (MediaItem, error) {
-	if u, err := url.Parse(input); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		return itemFromURL(input)
-	}
-	items, err := loadMediaInputs(ctx, []string{input})
-	if err != nil {
-		return MediaItem{}, err
-	}
-	if len(items) != 1 {
-		return MediaItem{}, fmt.Errorf("input resolved to %d items", len(items))
-	}
-	return items[0], nil
 }
 
 func libraryCollection(library *libraryState, name string) ([]MediaItem, error) {

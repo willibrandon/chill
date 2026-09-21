@@ -28,25 +28,30 @@ const (
 	MediaTrack MediaKind = "track"
 	// MediaURL is a finite direct HTTP(S) audio source.
 	MediaURL MediaKind = "url"
+	// MediaProvider is a stable item resolved by a configured remote provider.
+	MediaProvider MediaKind = "provider"
 )
 
 // MediaItem is the source-neutral unit used by playback, queues and playlists.
 // Station and Episode retain source-specific metadata without making queue
 // operations depend on either source.
 type MediaItem struct {
-	ID             string           `json:"id"`                        // ID is stable across queue and playlist copies.
-	Kind           MediaKind        `json:"kind"`                      // Kind selects source-specific playback behavior.
-	Source         string           `json:"source"`                    // Source is a local path or HTTP(S) address.
-	Title          string           `json:"title"`                     // Title is the primary display label.
-	Artist         string           `json:"artist,omitempty"`          // Artist names the performer or publisher.
-	Album          string           `json:"album,omitempty"`           // Album groups finite tracks.
-	Genre          string           `json:"genre,omitempty"`           // Genre carries optional source metadata.
-	Artwork        string           `json:"artwork,omitempty"`         // Artwork is a local path or remote URL.
-	EmbeddedLyrics string           `json:"embedded_lyrics,omitempty"` // EmbeddedLyrics retains file-tag lyrics.
-	Duration       float64          `json:"duration,omitempty"`        // Duration is the best known length in seconds.
-	Station        *Station         `json:"station,omitempty"`         // Station retains live-radio metadata.
-	Episode        *podcast.Episode `json:"episode,omitempty"`         // Episode retains podcast identity.
-	AddedAt        time.Time        `json:"added_at,omitzero"`         // AddedAt records insertion time.
+	ID             string            `json:"id"`                        // ID is stable across queue and playlist copies.
+	Kind           MediaKind         `json:"kind"`                      // Kind selects source-specific playback behavior.
+	Source         string            `json:"source"`                    // Source is a local path or HTTP(S) address.
+	Title          string            `json:"title"`                     // Title is the primary display label.
+	Artist         string            `json:"artist,omitempty"`          // Artist names the performer or publisher.
+	Album          string            `json:"album,omitempty"`           // Album groups finite tracks.
+	Genre          string            `json:"genre,omitempty"`           // Genre carries optional source metadata.
+	Artwork        string            `json:"artwork,omitempty"`         // Artwork is a local path or remote URL.
+	EmbeddedLyrics string            `json:"embedded_lyrics,omitempty"` // EmbeddedLyrics retains file-tag lyrics.
+	Duration       float64           `json:"duration,omitempty"`        // Duration is the best known length in seconds.
+	Provider       string            `json:"provider,omitempty"`        // Provider identifies the originating remote catalog.
+	ProviderID     string            `json:"provider_id,omitempty"`     // ProviderID is the source's stable item identifier.
+	ProviderMeta   map[string]string `json:"provider_meta,omitempty"`   // ProviderMeta retains source-specific identity and routing data.
+	Station        *Station          `json:"station,omitempty"`         // Station retains live-radio metadata.
+	Episode        *podcast.Episode  `json:"episode,omitempty"`         // Episode retains podcast identity.
+	AddedAt        time.Time         `json:"added_at,omitzero"`         // AddedAt records insertion time.
 }
 
 func mediaID(kind MediaKind, source string) string {
@@ -115,6 +120,14 @@ func (item MediaItem) normalized() (MediaItem, error) {
 		if _, err := itemFromURL(item.Source); err != nil {
 			return MediaItem{}, err
 		}
+	case MediaProvider:
+		item.Provider = strings.ToLower(strings.TrimSpace(item.Provider))
+		item.ProviderID = strings.TrimSpace(item.ProviderID)
+		u, err := url.Parse(item.Source)
+		if err != nil || u.Scheme != "chill-provider" || u.Host != item.Provider || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+			!providerKeyPattern.MatchString(item.Provider) || item.ProviderID == "" || len(item.ProviderID) > 512 || strings.ContainsAny(item.ProviderID, "\x00\r\n") || strings.TrimPrefix(u.Path, "/") != item.ProviderID {
+			return MediaItem{}, fmt.Errorf("invalid provider media item")
+		}
 	default:
 		return MediaItem{}, fmt.Errorf("unknown media kind %q", item.Kind)
 	}
@@ -141,13 +154,18 @@ func (item MediaItem) normalized() (MediaItem, error) {
 func (item MediaItem) finite() bool { return item.Kind != MediaStation }
 
 func (item MediaItem) display() string {
+	label := item.Title
 	if item.Artist != "" {
-		return item.Artist + " — " + item.Title
+		label = item.Artist + " — " + item.Title
+	} else if item.Album != "" && item.Album != item.Title {
+		label = item.Album + " — " + item.Title
 	}
-	if item.Album != "" && item.Album != item.Title {
-		return item.Album + " — " + item.Title
+	if item.ProviderMeta["playback"] == "preview" {
+		label += " [preview]"
+	} else if item.ProviderMeta["playback"] == "catalog" {
+		label += " [catalog]"
 	}
-	return item.Title
+	return label
 }
 
 type queueSnapshot struct {
@@ -171,15 +189,17 @@ type resumePoint struct {
 }
 
 type libraryState struct {
-	Version   int                      `json:"version"`         // Version identifies the persistent schema.
-	Queue     []MediaItem              `json:"queue"`           // Queue holds regular pending items.
-	PlayNext  []MediaItem              `json:"play_next"`       // PlayNext holds priority items.
-	Cycle     []MediaItem              `json:"cycle,omitempty"` // Cycle preserves the repeat-all sequence.
-	Undo      []queueSnapshot          `json:"undo,omitempty"`  // Undo stores bounded queue snapshots.
-	Shuffle   bool                     `json:"shuffle"`         // Shuffle randomizes regular queue selection.
-	Repeat    string                   `json:"repeat"`          // Repeat is off, all, or one.
-	Playlists map[string]savedPlaylist `json:"playlists"`       // Playlists maps normalized names to collections.
-	Favorites map[string]bool          `json:"favorites"`       // Favorites is the global item favorite set.
+	change        uint64                   `json:"-"`               // change invalidates in-process remote snapshots.
+	Version       int                      `json:"version"`         // Version identifies the persistent schema.
+	QueueRevision uint64                   `json:"queue_revision"`  // QueueRevision survives daemon upgrades for optimistic concurrency.
+	Queue         []MediaItem              `json:"queue"`           // Queue holds regular pending items.
+	PlayNext      []MediaItem              `json:"play_next"`       // PlayNext holds priority items.
+	Cycle         []MediaItem              `json:"cycle,omitempty"` // Cycle preserves the repeat-all sequence.
+	Undo          []queueSnapshot          `json:"undo,omitempty"`  // Undo stores bounded queue snapshots.
+	Shuffle       bool                     `json:"shuffle"`         // Shuffle randomizes regular queue selection.
+	Repeat        string                   `json:"repeat"`          // Repeat is off, all, or one.
+	Playlists     map[string]savedPlaylist `json:"playlists"`       // Playlists maps normalized names to collections.
+	Favorites     map[string]bool          `json:"favorites"`       // Favorites is the global item favorite set.
 	// FavoriteOrder preserves the order in which media was favorited.
 	FavoriteOrder []string        `json:"favorite_order,omitempty"`
 	Bookmarks     map[string]bool `json:"bookmarks"` // Bookmarks is the global bookmark set.
@@ -200,7 +220,7 @@ func libraryPath() string {
 }
 
 func emptyLibrary() *libraryState {
-	return &libraryState{Version: 1, Repeat: "off", Queue: []MediaItem{}, PlayNext: []MediaItem{},
+	return &libraryState{change: 1, Version: 1, QueueRevision: 1, Repeat: "off", Queue: []MediaItem{}, PlayNext: []MediaItem{},
 		Playlists: map[string]savedPlaylist{}, Favorites: map[string]bool{}, Bookmarks: map[string]bool{},
 		Items: map[string]MediaItem{}, Recent: []MediaItem{}, Resume: map[string]resumePoint{}}
 }
@@ -223,6 +243,9 @@ func loadLibrary() (*libraryState, error) {
 	}
 	if library.Repeat != "off" && library.Repeat != "all" && library.Repeat != "one" {
 		return nil, fmt.Errorf("invalid repeat mode in library.json")
+	}
+	if library.QueueRevision == 0 {
+		library.QueueRevision = 1
 	}
 	if len(library.Queue)+len(library.PlayNext) > 5000 || len(library.Cycle) > 5000 || len(library.Recent) > 200 || len(library.Undo) > 20 {
 		return nil, fmt.Errorf("read library: collection limit exceeded")
@@ -323,7 +346,32 @@ func (library *libraryState) commit() error {
 		}
 		delete(library.Resume, oldestKey)
 	}
-	return writeJSON(libraryPath(), library)
+	if err := writeJSON(libraryPath(), library); err != nil {
+		return err
+	}
+	library.change++
+	return nil
+}
+
+func (library *libraryState) queueFingerprint() string {
+	data, _ := json.Marshal(struct {
+		Queue    []MediaItem `json:"queue"`
+		PlayNext []MediaItem `json:"play_next"`
+		Cycle    []MediaItem `json:"cycle"`
+		Shuffle  bool        `json:"shuffle"`
+		Repeat   string      `json:"repeat"`
+	}{library.Queue, library.PlayNext, library.Cycle, library.Shuffle, library.Repeat})
+	return string(data)
+}
+
+func (library *libraryState) commitQueue(previous string) error {
+	if library.queueFingerprint() != previous {
+		library.QueueRevision++
+		if library.QueueRevision == 0 {
+			library.QueueRevision = 1
+		}
+	}
+	return library.commit()
 }
 
 func cloneItems(items []MediaItem) []MediaItem { return slices.Clone(items) }

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -17,7 +18,12 @@ func sourceNeedsYtdl(source string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	return host == "youtu.be" || host == "youtube.com" || strings.HasSuffix(host, ".youtube.com")
+	for _, domain := range []string{"youtube.com", "youtu.be", "soundcloud.com", "mixcloud.com", "bandcamp.com", "bilibili.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }
 
 // requirementsError reports programs chill needs that couldn't be found.
@@ -135,7 +141,8 @@ func checkMediaRequirements(items []MediaItem) error {
 		if item.Kind == MediaPodcast {
 			need("ffprobe")
 		}
-		if sourceNeedsYtdl(item.Source) && !hasExtractor && !seen["yt-dlp"] {
+		providerNeedsExtractor := item.Kind == MediaProvider && slices.Contains([]string{"youtube", "ytmusic", "soundcloud", "mixcloud"}, item.Provider)
+		if (sourceNeedsYtdl(item.Source) || providerNeedsExtractor) && !hasExtractor && !seen["yt-dlp"] {
 			seen["yt-dlp"] = true
 			missing = append(missing, "yt-dlp")
 		}
@@ -144,34 +151,6 @@ func checkMediaRequirements(items []MediaItem) error {
 		return &requirementsError{missing}
 	}
 	return nil
-}
-
-// checkRequirements returns the programs required by the daemon's PCM pipeline.
-func checkRequirements() error {
-	var missing []string
-
-	mpv, err := exec.LookPath("mpv")
-	if err != nil {
-		missing = append(missing, "mpv")
-	}
-	if !hasYtdl(mpv) {
-		missing = append(missing, "yt-dlp")
-	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		missing = append(missing, "ffmpeg")
-	}
-
-	if len(missing) == 0 {
-		return nil
-	}
-	return &requirementsError{missing}
-}
-
-// hasYtdl reports whether mpv will find something to fetch YouTube streams
-// with. mpv doesn't only look in PATH, a copy in its config directory or
-// beside mpv itself works too.
-func hasYtdl(mpv string) bool {
-	return findYtdl(mpv) != ""
 }
 
 // findYtdl uses the same search locations as the requirements check so doctor

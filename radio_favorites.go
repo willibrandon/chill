@@ -77,7 +77,7 @@ func canonicalRadioFavorites(library *libraryState) []radio.Station {
 func attachRadioFavorites(preferences radio.Library) (radio.Library, error) {
 	library, err := fetchLibraryState()
 	if err != nil {
-		return radio.Library{}, err
+		return preferences, err
 	}
 	preferences.Favorites = canonicalRadioFavorites(library)
 	return preferences, nil

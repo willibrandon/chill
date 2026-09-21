@@ -15,31 +15,42 @@ import (
 )
 
 type foregroundMediaModel struct {
-	width, height int
-	items         []MediaItem
-	index         int
-	player        *pcmPlayer
-	settings      playbackSettings
-	eq            equalizerConfig
-	eqCursor      int
-	state, err    string
-	paused, muted bool
-	generation    uint64
-	position      time.Duration
-	shuffle       bool
-	repeat        string
-	media         *media.Service
-	library       *libraryState
-	podcasts      *podcastLibrary
-	rate          float64
-	lyricsOpen    bool
-	lyricsLoading bool
-	lyricsLines   []string
-	lyricsHeading string
-	lyricsOffset  int
-	lastProgress  time.Time
-	notifiedID    string
-	played        map[int]bool
+	width, height     int
+	items             []MediaItem
+	index             int
+	player            *pcmPlayer
+	settings          playbackSettings
+	eq                equalizerConfig
+	eqCursor          int
+	state, err        string
+	paused, muted     bool
+	generation        uint64
+	shuffle           bool
+	repeat            string
+	media             *media.Service
+	library           *libraryState
+	podcasts          *podcastLibrary
+	rate              float64
+	lyricsOpen        bool
+	lyricsLoading     bool
+	lyricsLines       []string
+	lyricsHeading     string
+	lyricsOffset      int
+	lastProgress      time.Time
+	notifiedID        string
+	played            map[int]bool
+	providerSync      providerProgressSequencer
+	providerDone      bool
+	providerScrobbled bool
+}
+
+type foregroundProviderSyncMsg struct{ err error }
+
+func foregroundPlaybackState(paused bool) string {
+	if paused {
+		return "paused"
+	}
+	return "playing"
 }
 
 func (m *foregroundMediaModel) current() MediaItem { return m.items[m.index] }
@@ -50,7 +61,10 @@ func (m *foregroundMediaModel) start(offset time.Duration) tea.Cmd {
 		m.player = nil
 	}
 	m.generation++
+	m.providerDone = false
+	m.providerScrobbled = false
 	item := m.current()
+	rememberForegroundProviderItem(item)
 	raw, err := newPCMPlayer(m.settings.Volume, m.muted, m.paused, max(time.Duration(0), offset), item.finite())
 	if err != nil {
 		m.state, m.err = "failed", err.Error()
@@ -73,6 +87,15 @@ func (m *foregroundMediaModel) start(offset time.Duration) tea.Cmd {
 	m.player, m.state, m.err = p, "loading", ""
 	m.preloadNextLocal()
 	return waitForegroundPlayer(p, m.generation)
+}
+
+func rememberForegroundProviderItem(item MediaItem) {
+	if item.Kind != MediaProvider {
+		return
+	}
+	if registry, err := providers(); err == nil {
+		registry.remember([]MediaItem{item})
+	}
 }
 
 func (m *foregroundMediaModel) preloadNextLocal() {
@@ -110,13 +133,17 @@ func (m *foregroundMediaModel) continueOrStart(previous MediaItem, offset time.D
 func (m *foregroundMediaModel) next() tea.Cmd {
 	previous := m.current()
 	m.saveProgress(true)
+	if previous.Kind == MediaProvider {
+		m.providerDone = true
+	}
+	providerSync := m.syncProviderProgress("finished")
 	if len(m.items) == 1 && m.repeat == "off" {
 		m.state = "ended"
 		m.persistQueue()
-		return nil
+		return providerSync
 	}
 	if m.repeat == "one" {
-		return m.continueOrStart(previous, 0)
+		return tea.Batch(providerSync, m.continueOrStart(previous, 0))
 	}
 	if m.shuffle && len(m.items) > 1 {
 		var candidates []int
@@ -136,7 +163,7 @@ func (m *foregroundMediaModel) next() tea.Cmd {
 		if len(candidates) == 0 {
 			m.state = "ended"
 			m.persistQueue()
-			return nil
+			return providerSync
 		}
 		m.index = candidates[rand.Intn(len(candidates))]
 	} else if m.index+1 < len(m.items) {
@@ -147,17 +174,18 @@ func (m *foregroundMediaModel) next() tea.Cmd {
 	} else {
 		m.state = "ended"
 		m.persistQueue()
-		return nil
+		return providerSync
 	}
 	m.played[m.index] = true
 	m.persistQueue()
-	return m.continueOrStart(previous, m.resumePosition())
+	return tea.Batch(providerSync, m.continueOrStart(previous, m.resumePosition()))
 }
 
 func (m *foregroundMediaModel) previous() tea.Cmd {
 	m.saveProgress(false)
+	providerSync := m.syncProviderProgress(foregroundPlaybackState(m.paused))
 	if m.player != nil && m.player.position() > 3*time.Second {
-		return m.start(0)
+		return tea.Batch(providerSync, m.start(0))
 	}
 	if m.index > 0 {
 		m.index--
@@ -165,16 +193,17 @@ func (m *foregroundMediaModel) previous() tea.Cmd {
 		m.index = len(m.items) - 1
 	} else {
 		m.err = "no previous item"
-		return nil
+		return providerSync
 	}
 	m.persistQueue()
-	return m.start(m.resumePosition())
+	return tea.Batch(providerSync, m.start(m.resumePosition()))
 }
 
 func (m *foregroundMediaModel) persistQueue() {
 	if m.library == nil {
 		return
 	}
+	previous := m.library.queueFingerprint()
 	var pending []MediaItem
 	if m.shuffle {
 		for index, item := range m.items {
@@ -188,7 +217,7 @@ func (m *foregroundMediaModel) persistQueue() {
 	m.library.Queue, m.library.PlayNext = pending, nil
 	m.library.Cycle = cloneItems(m.items)
 	m.library.Shuffle, m.library.Repeat = m.shuffle, m.repeat
-	_ = m.library.commit()
+	_ = m.library.commitQueue(previous)
 }
 
 func (m *foregroundMediaModel) resumePosition() time.Duration {
@@ -209,7 +238,14 @@ func (m *foregroundMediaModel) saveProgress(ended bool) {
 	if m.player == nil || !m.current().finite() {
 		return
 	}
-	item, position := m.current(), m.player.position().Seconds()
+	m.saveProgressAt(ended, m.player.position())
+}
+
+func (m *foregroundMediaModel) saveProgressAt(ended bool, playhead time.Duration) {
+	if !m.current().finite() {
+		return
+	}
+	item, position := m.current(), playhead.Seconds()
 	if item.Kind == MediaPodcast && m.podcasts != nil {
 		_ = m.podcasts.record(*item.Episode, position, item.Duration, ended)
 		return
@@ -225,6 +261,35 @@ func (m *foregroundMediaModel) saveProgress(ended bool) {
 	m.library.Resume[item.ID] = resumePoint{Position: max(0, position), Duration: duration, Played: ended || duration > 0 && position >= threshold, Updated: time.Now().UTC()}
 	m.library.recordRecent(item)
 	_ = m.library.commit()
+}
+
+func (m *foregroundMediaModel) syncProviderProgress(state string) tea.Cmd {
+	item := m.current()
+	if item.Kind != MediaProvider {
+		return nil
+	}
+	position := time.Duration(0)
+	if m.player != nil {
+		position = m.player.position()
+	}
+	duration := time.Duration(item.Duration * float64(time.Second))
+	scrobble := state == "finished" && !m.providerScrobbled
+	if scrobble {
+		m.providerScrobbled = true
+	}
+	result := m.providerSync.submit(providerProgressUpdate{
+		item: item, position: position, duration: duration, state: state, completed: m.providerDone || state == "finished", scrobble: scrobble,
+	}, nil)
+	return func() tea.Msg {
+		return foregroundProviderSyncMsg{err: <-result}
+	}
+}
+
+func foregroundProviderFavorite(item MediaItem, favorite bool) tea.Cmd {
+	if item.Kind != MediaProvider {
+		return nil
+	}
+	return func() tea.Msg { return foregroundProviderSyncMsg{err: setProviderFavorite(item, favorite)} }
 }
 
 func (m *foregroundMediaModel) loadLyrics() tea.Cmd {
@@ -251,7 +316,9 @@ func (m *foregroundMediaModel) mediaState() media.State {
 		status = media.StatusPaused
 	}
 	item := m.current()
+	audio := m.settings.Audio.status(m.settings.Audio.Device)
 	state := media.State{Status: status, Volume: float64(m.settings.Volume) / 100,
+		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
 		Track: media.Track{Title: item.Title, Artist: item.Artist, Album: item.Album, Genre: item.Genre, URL: item.Source, ArtURL: item.Artwork,
 			Duration: time.Duration(item.Duration * float64(time.Second))},
 		CanGoNext: len(m.items) > 1 || m.repeat != "off", CanGoPrevious: m.index > 0 || m.repeat == "all", Seekable: item.finite()}
@@ -296,6 +363,11 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if m.paused {
 				m.state = "paused"
 			}
+			if item := m.current(); item.Kind == MediaProvider && item.Artwork == "" {
+				if artwork := m.player.artwork(); artwork != "" {
+					m.items[m.index].Artwork = artwork
+				}
+			}
 			if m.settings.Notifications && m.notifiedID != m.current().ID {
 				item := m.current()
 				m.notifiedID = item.ID
@@ -310,14 +382,22 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.updateMedia()
-		return m, waitForegroundPlayer(m.player, m.generation)
+		return m, tea.Batch(waitForegroundPlayer(m.player, m.generation), m.syncProviderProgress("started"))
 	case foregroundMediaTickMsg:
+		var providerSync tea.Cmd
 		if m.state == "playing" && time.Since(m.lastProgress) >= 15*time.Second {
 			m.saveProgress(false)
+			providerSync = m.syncProviderProgress("playing")
 			m.lastProgress = time.Now()
 		}
 		m.updateMedia()
-		return m, foregroundMediaTick()
+		return m, tea.Batch(foregroundMediaTick(), providerSync)
+	case foregroundProviderSyncMsg:
+		if msg.err != nil {
+			m.err = "provider sync: " + msg.err.Error()
+		} else if strings.HasPrefix(m.err, "provider sync:") {
+			m.err = ""
+		}
 	case foregroundLyricsMsg:
 		m.lyricsLoading = false
 		if msg.err != nil {
@@ -340,16 +420,20 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = "playback is unavailable"
 			return m, nil
 		}
+		var providerSync tea.Cmd
 		switch msg.Kind {
 		case media.Toggle:
 			m.paused = !m.paused
 			_ = m.player.command("set_property", "pause", m.paused)
+			providerSync = m.syncProviderProgress(foregroundPlaybackState(m.paused))
 		case media.Play:
 			m.paused = false
 			_ = m.player.command("set_property", "pause", false)
+			providerSync = m.syncProviderProgress("playing")
 		case media.Pause:
 			m.paused = true
 			_ = m.player.command("set_property", "pause", true)
+			providerSync = m.syncProviderProgress("paused")
 		case media.Stop:
 			return m, tea.Quit
 		case media.Next:
@@ -364,6 +448,7 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.setVolume(int(msg.Volume*100 + 0.5))
 		}
 		m.updateMedia()
+		return m, providerSync
 	case tea.KeyPressMsg:
 		if m.lyricsOpen {
 			room := max(1, m.height-6)
@@ -400,6 +485,7 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.player.command("set_property", "pause", m.paused); err != nil {
 				m.err = err.Error()
 			}
+			return m, m.syncProviderProgress(foregroundPlaybackState(m.paused))
 		case "m":
 			m.muted = !m.muted
 			if err := m.player.command("set_property", "mute", m.muted); err != nil {
@@ -453,6 +539,9 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = err.Error()
 				} else {
 					m.err = fmt.Sprintf("%s: %t", label, marked)
+					if !bookmark {
+						return m, foregroundProviderFavorite(item, marked)
+					}
 				}
 			}
 		case "h":
@@ -623,13 +712,34 @@ func runForegroundMediaItems(items []MediaItem) error {
 		service.Close()
 	}
 	if model.player != nil {
-		model.saveProgress(false)
-		model.player.close()
+		player := model.player
+		finalizeForegroundPlayback(player, func(position time.Duration) {
+			item := model.current()
+			model.saveProgressAt(false, position)
+			if item.Kind == MediaProvider {
+				model.providerSync.submit(providerProgressUpdate{
+					item: item, position: position, duration: time.Duration(item.Duration * float64(time.Second)), state: "stopped", completed: model.providerDone,
+				}, nil)
+			}
+		})
+		model.player = nil
 	}
+	model.providerSync.wait()
 	if library != nil {
 		model.persistQueue()
 	}
 	return runErr
+}
+
+type foregroundPlaybackCloser interface {
+	position() time.Duration
+	close()
+}
+
+func finalizeForegroundPlayback(player foregroundPlaybackCloser, afterClose func(time.Duration)) {
+	position := player.position()
+	player.close()
+	afterClose(position)
 }
 
 func saveForegroundQueueModes(shuffle bool, repeat string) error {
@@ -640,6 +750,7 @@ func saveForegroundQueueModes(shuffle bool, repeat string) error {
 	if err != nil {
 		return err
 	}
+	previous := library.queueFingerprint()
 	if shuffle {
 		library.Shuffle = true
 	}
@@ -650,5 +761,5 @@ func saveForegroundQueueModes(shuffle bool, repeat string) error {
 		}
 		library.Repeat = repeat
 	}
-	return library.commit()
+	return library.commitQueue(previous)
 }

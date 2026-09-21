@@ -107,8 +107,10 @@ func (m *foregroundModel) mediaState() media.State {
 	if m.muted {
 		volume = 0
 	}
+	audio := m.settings.Audio.status(m.settings.Audio.Device)
 	return media.State{
 		Status: status, Volume: volume, Position: m.player.position(),
+		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
 		Track:     media.Track{Title: title, Artist: artist, Album: m.station.Name, Genre: m.station.Tags, URL: m.station.URL, ArtURL: m.station.Artwork},
 		CanGoNext: len(stationSnapshot()) > 1 || len(m.stationForward) > 0, CanGoPrevious: len(m.stationHistory) > 0,
 	}

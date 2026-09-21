@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,8 +49,33 @@ func TestNowPlayingHistoryCoalescesAndFeedsMedia(t *testing.T) {
 		t.Fatalf("history = %+v", entries)
 	}
 	state := d.mediaState()
-	if state.Track.Title != "Song" || state.Track.Artist != "Artist" || state.Track.ArtURL != d.station.Artwork {
+	if state.Track.Title != "Song" || state.Track.Artist != "Artist" || state.Track.ArtURL != d.station.Artwork || state.AudioDevice != "auto" || state.AudioFormat != "f32le/stereo/48000Hz" {
 		t.Fatalf("media state = %+v", state)
+	}
+}
+
+// TestNewCommandHelpStaysSideEffectFree checks that discovery never starts a daemon or TUI.
+func TestNewCommandHelpStaysSideEffectFree(t *testing.T) {
+	ctx := context.Background()
+	checks := []struct {
+		name string
+		run  func() (string, error)
+	}{
+		{"remote", func() (string, error) { return runRemoteCommand(ctx, []string{"--help"}) }},
+		{"audio", func() (string, error) { return runAudioCommand(ctx, []string{"--help"}, false) }},
+		{"providers", func() (string, error) { return runProvidersCommand(ctx, []string{"--help"}, false) }},
+		{"search", func() (string, error) { return runSearchCommand(ctx, []string{"--help"}, false, false) }},
+		{"browse", func() (string, error) { return runBrowseCommand(ctx, []string{"--help"}, false, false) }},
+		{"link", func() (string, error) { return runLinkCommand(ctx, []string{"--help"}, false) }},
+		{"completion", func() (string, error) { return runCompletionCommand([]string{"--help"}) }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			output, err := check.run()
+			if err != nil || !strings.HasPrefix(output, "Usage: chill ") {
+				t.Fatalf("output = %q, err = %v", output, err)
+			}
+		})
 	}
 }
 

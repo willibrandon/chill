@@ -6,6 +6,13 @@ import (
 	"io"
 )
 
+func helpRequested(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	return args[0] == "help" || args[0] == "-h" || args[0] == "--help"
+}
+
 // printCLIHelp supplements the registered flags with the positional commands
 // that Go's default usage output cannot discover.
 func printCLIHelp() {
@@ -24,11 +31,21 @@ With no arguments, chill opens the interactive REPL.
 		{"queue [command]", "list, search, append, replace, reorder, remove, or undo"},
 		{"playlist [command]", "manage and import or export saved playlists"},
 		{"library [collection]", "list recent items, favorites, and bookmarks"},
+		{"search <words>", "search every enabled music provider"},
+		{"browse <provider>", "browse one provider's catalog"},
+		{"providers [--check]", "list and validate provider connections"},
+		{"setup [provider]", "configure a provider with protected credentials"},
+		{"link [command]", "open or register secure chill:// links"},
+		{"completion <shell>", "generate Bash, Zsh, Fish, or PowerShell completion"},
 		{"shuffle [on|off]", "control source-neutral queue shuffle"},
 		{"repeat [off|all|one]", "control source-neutral queue repeat"},
 		{"pause / resume / toggle / stop", "control current playback"},
 		{"status [--json]", "show current playback"},
+		{"remote [command]", "use the versioned automation and event API"},
 		{"volume [level]", "report or change volume (0-100)"},
+		{"audio [setting]", "show or change output quality and routing"},
+		{"device [list|set]", "list or switch audio output devices"},
+		{"mono [on|off|toggle]", "control mono downmix"},
 		{"eq [preset|next|prev|list]", "show or select the persistent 10-band equalizer"},
 		{"eq --band <band> <dB>", "edit one band (-12 to +12 dB)"},
 		{"podcasts [command|feed-url]", "browse podcasts; --help lists all commands"},
@@ -51,6 +68,7 @@ With no arguments, chill opens the interactive REPL.
 		{"chill doctor --stations", "check all configured streams"},
 		{"chill doctor --stream <name|url>", "check one stream"},
 		{"chill doctor --logs", "show the latest daemon startup log"},
+		{"chill doctor --providers", "validate enabled provider connections"},
 		{"chill doctor --help", "show all diagnostic options"},
 	})
 	fmt.Fprintln(out, "\nOptions (accept either - or --):")
@@ -72,13 +90,20 @@ With no arguments, chill opens the interactive REPL.
 		{"chill radio", "open the radio browser"},
 		{"chill radio --fg", "browse, then play the selection in the foreground"},
 		{"chill radio search jazz --json", "search stations as JSON"},
+		{"chill search portishead --provider ytmusic", "search a provider catalog"},
+		{"chill search ambient --queue all", "append every search result"},
+		{"chill link register", "register chill:// links for this user"},
+		{"chill completion zsh", "print Zsh completion definitions"},
 		{"chill history --limit 20", "show recently heard live tracks"},
 		{"chill notifications on", "enable track-change notifications"},
 		{"chill --vol +5", "raise the volume"},
+		{"chill device list", "list audio output devices"},
+		{"chill --audio-profile Lossless song.flac", "play with the lossless audio profile"},
 		{"chill eq Bass-Boost", "select an equalizer preset"},
 		{"chill eq --band 1k +3", "edit one band and select Custom"},
 		{"chill --sleep 45m", "stop playback in 45 minutes"},
 		{"chill --status --json", "show read-only, machine-readable status"},
+		{"chill remote events runtime.state", "stream playback state changes as JSON"},
 	})
 	fmt.Fprint(out, `
 Package updates:

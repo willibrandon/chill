@@ -58,7 +58,7 @@ func (d *Daemon) playMediaItem(item MediaItem, restart, remember bool) string {
 		if !restart {
 			position = podcasts.resume(*item.Episode)
 		}
-	} else if item.Kind == MediaTrack || item.Kind == MediaURL {
+	} else if item.Kind == MediaTrack || item.Kind == MediaURL || item.Kind == MediaProvider {
 		if point := library.Resume[item.ID]; !restart && !point.Played && point.Position >= 15 {
 			position = time.Duration(max(0, point.Position-5) * float64(time.Second))
 		}
@@ -482,7 +482,18 @@ func (d *Daemon) queueCommand(action, arg string) string {
 		if bookmark {
 			label = "bookmark"
 		}
-		return save(fmt.Sprintf("%s: %t", label, marked))
+		result := save(fmt.Sprintf("%s: %t", label, marked))
+		if commandSucceeded(result) && !bookmark {
+			selected := *item
+			go func() {
+				if err := setProviderFavorite(selected, marked); err != nil {
+					d.mu.Lock()
+					d.storageError = "could not synchronize provider favorite: " + err.Error()
+					d.mu.Unlock()
+				}
+			}()
+		}
+		return result
 	}
 	return fail("unknown queue command")
 }

@@ -30,7 +30,9 @@ const defaultVolume = 70
 
 const maxRetryDelay = 30 * time.Second
 
-const daemonProtocol = 6
+const daemonFrameLimit = 16 << 20
+
+const daemonProtocol = 7
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
@@ -39,6 +41,7 @@ type Daemon struct {
 	mu                             sync.Mutex // protects all fields
 	player                         player
 	newPlayer                      func(int, bool, bool) (player, error) // nil uses mpv
+	newAudioPlayer                 func(int, bool, bool, time.Duration, bool, AudioSettings) (player, error)
 	watchDone                      chan struct{}
 	station                        *Station // currently playing station
 	episode                        *podcast.Episode
@@ -80,10 +83,24 @@ type Daemon struct {
 	sleepGeneration                uint64
 	startedAt                      time.Time    // when current station started
 	listener                       net.Listener // Unix socket listener
+	providerProgress               providerProgressSequencer
+	providerCompleted              bool
+	providerScrobbled              bool
+	runtimeRevision                uint64 // changes after successful state mutations
+	queueRevision                  uint64 // changes after successful queue mutations
+	queueFingerprint               string // detects queue mutations from every control surface
+	remote                         *remoteService
+	audio                          AudioSettings
+	activeAudioDevice              string
+	audioDeviceFallback            bool
 }
 
 // Status represents the current playback state, serialized as JSON for clients.
 type Status struct {
+	// Revision changes after a successful runtime mutation.
+	Revision uint64 `json:"revision"`
+	// QueueRevision changes after a successful queue mutation.
+	QueueRevision uint64 `json:"queue_revision"`
 	// NowPlaying is the current live-radio title metadata.
 	NowPlaying *streammeta.NowPlaying `json:"now_playing,omitempty"`
 	// Episode describes the selected podcast episode, if any.
@@ -112,6 +129,8 @@ type Status struct {
 	Speed float64 `json:"speed,omitempty"`
 	// Version identifies the running daemon binary.
 	Version string `json:"version"`
+	// BuildID identifies the exact daemon executable.
+	BuildID string `json:"build_id,omitempty"`
 	// Protocol is the daemon's IPC compatibility version.
 	Protocol int    `json:"protocol"`
 	Playing  bool   `json:"playing"`           // true if actively playing
@@ -128,6 +147,10 @@ type Status struct {
 	EQPreset string `json:"eq_preset"`
 	// EQBands contains the ten currently audible gains in decibels.
 	EQBands audio.EqualizerBands `json:"eq_bands"`
+	// Audio describes desired and active audio output state.
+	Audio AudioStatus `json:"audio"`
+	// Notifications reports whether track-change notifications are enabled.
+	Notifications bool `json:"notifications"`
 	// State is idle, loading, reconnecting, playing, paused, ended, or failed.
 	State string `json:"state"`
 	// Error describes the latest playback failure.
@@ -188,12 +211,22 @@ func (d *Daemon) handle(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
 	for {
-		line, err := reader.ReadString('\n')
+		line, err := readDaemonFrame(reader)
 		if err != nil {
 			return
 		}
 
-		cmd := strings.TrimSpace(line)
+		cmd := strings.TrimSpace(string(line))
+		if strings.HasPrefix(cmd, "{") {
+			if d.remote == nil {
+				_, _ = conn.Write([]byte(`{"version":2,"ok":false,"error":{"code":"unavailable","message":"remote API unavailable"}}` + "\n"))
+				return
+			}
+			if d.remote.handle(conn, []byte(cmd)) {
+				return
+			}
+			continue
+		}
 		if cmd == "visualize" {
 			d.serveVisualizer(conn)
 			return
@@ -206,21 +239,54 @@ func (d *Daemon) handle(conn net.Conn) {
 		}
 
 		response := d.execute(action, arg)
-		conn.Write([]byte(response + "\n"))
+		_, _ = conn.Write([]byte(response + "\n"))
 
 		if action == "stop" || action == "quit" {
-			d.listener.Close()
+			_ = d.listener.Close()
+			d.providerProgress.wait()
 			cleanupSocket()
 			os.Exit(0)
 		}
 	}
 }
 
+func readDaemonFrame(reader *bufio.Reader) ([]byte, error) {
+	frame := make([]byte, 0, 4096)
+	for {
+		part, continued, err := reader.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if len(frame)+len(part) > daemonFrameLimit {
+			return nil, fmt.Errorf("daemon request exceeds %d bytes", daemonFrameLimit)
+		}
+		frame = append(frame, part...)
+		if !continued {
+			return frame, nil
+		}
+	}
+}
+
 func (d *Daemon) execute(action, arg string) string {
+	return d.executeWithRevision(action, arg, nil)
+}
+
+func (d *Daemon) executeWithRevision(action, arg string, expected *uint64) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.ensureQueueFingerprint()
 	defer d.updateMedia()
+	if expected != nil && d.queueRevision != *expected {
+		return fail(fmt.Sprintf("queue revision conflict: expected %d, current %d", *expected, d.queueRevision))
+	}
+	response := d.executeLocked(action, arg)
+	if commandSucceeded(response) && mutatesRuntime(action, arg) {
+		d.runtimeRevision++
+	}
+	return response
+}
 
+func (d *Daemon) executeLocked(action, arg string) string {
 	switch action {
 	case "podcasts", "podcast-country", "podcast-subscribe", "podcast-unsubscribe":
 		return d.podcastSettings(action, arg)
@@ -275,6 +341,10 @@ func (d *Daemon) execute(action, arg string) string {
 		d.cancelSleep()
 		d.kill()
 		return ok("stopped")
+	case "halt":
+		d.cancelSleep()
+		d.kill()
+		return ok("stopped")
 	case "skip":
 		return d.skip()
 	case "status":
@@ -291,6 +361,15 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.equalizerStateCmd(arg)
 	case "notifications":
 		return d.notificationsCmd(arg)
+	case "audio":
+		return d.audioCmd(arg)
+	case "providers-reload":
+		resetProviders()
+		registry, err := providers()
+		if err != nil {
+			return fail(err.Error())
+		}
+		return ok(fmt.Sprintf("providers reloaded: %d", len(registry.order)))
 	case "reload":
 		return d.reload()
 	case "sleep":
@@ -299,6 +378,22 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.restore(arg)
 	default:
 		return fail("unknown command")
+	}
+}
+
+func commandSucceeded(response string) bool {
+	var result reply
+	return json.Unmarshal([]byte(response), &result) == nil && result.OK
+}
+
+func mutatesRuntime(action, arg string) bool {
+	switch action {
+	case "status", "list", "library-state", "queue-list":
+		return false
+	case "eq", "notifications", "vol", "sleep", "audio":
+		return strings.TrimSpace(arg) != ""
+	default:
+		return true
 	}
 }
 
@@ -351,16 +446,51 @@ func (d *Daemon) startPlayback() error {
 	if d.retries > 0 {
 		d.state = "reconnecting"
 	}
+	effectiveAudio := d.audio
 	start := d.newPlayer
 	if start == nil {
-		start = startPCMPlayer
+		startAudio := d.newAudioPlayer
+		if startAudio == nil {
+			startAudio = startPCMPlayerWithAudio
+		}
+		if d.audioDeviceFallback && d.audio.Device != "auto" {
+			effectiveAudio.Device = "auto"
+		}
+		start = func(v int, m, p bool) (player, error) {
+			return startAudio(v, m, p, 0, false, effectiveAudio)
+		}
 		if d.current != nil && d.current.finite() {
-			start = func(v int, m, p bool) (player, error) { return startPCMPlayerAt(v, m, p, d.episodeOffset) }
+			start = func(v int, m, p bool) (player, error) {
+				return startAudio(v, m, p, d.episodeOffset, true, effectiveAudio)
+			}
 		}
 	}
 	p, err := start(d.volume, d.muted, d.paused)
+	fellBack := false
+	if err != nil && d.newPlayer == nil && effectiveAudio.Device != "auto" {
+		fallback := d.audio
+		fallback.Device = "auto"
+		startAudio := d.newAudioPlayer
+		if startAudio == nil {
+			startAudio = startPCMPlayerWithAudio
+		}
+		p, err = startAudio(d.volume, d.muted, d.paused, d.episodeOffset, d.current != nil && d.current.finite(), fallback)
+		if err == nil {
+			fellBack = true
+			d.activeAudioDevice = "auto"
+			d.audioDeviceFallback = true
+			d.storageError = fmt.Sprintf("audio device %q unavailable; using the system default", d.audio.Device)
+		}
+	}
 	if err != nil {
 		return err
+	}
+	if !fellBack {
+		d.activeAudioDevice = effectiveAudio.Device
+		d.audioDeviceFallback = effectiveAudio.Device == "auto" && d.audio.Device != "auto"
+		if !d.audioDeviceFallback && strings.HasPrefix(d.storageError, "audio device ") {
+			d.storageError = ""
+		}
 	}
 	d.player = p
 	p.setEqualizer(d.equalizer().activeBands())
@@ -399,6 +529,11 @@ func (d *Daemon) startPlayback() error {
 	} else if d.episode != nil {
 		source = d.episodeCache.URL()
 	} else if d.current != nil {
+		if d.current.Kind == MediaProvider {
+			if registry, registryErr := providers(); registryErr == nil {
+				registry.remember([]MediaItem{*d.current})
+			}
+		}
 		source = d.current.Source
 	} else {
 		source = d.station.URL
@@ -437,6 +572,9 @@ func (d *Daemon) playerEvent(e playerEvent) {
 		return
 	}
 	if e.err != "" {
+		if e.output && d.fallbackFromAudioOutput(e.err) {
+			return
+		}
 		d.playbackFailed(e.err)
 		return
 	}
@@ -450,14 +588,48 @@ func (d *Daemon) playerEvent(e playerEvent) {
 			d.state = "paused"
 		}
 		d.startedAt = time.Now()
+		if d.current != nil && d.current.Kind == MediaProvider && d.current.Artwork == "" {
+			if source, ok := d.player.(interface{ artwork() string }); ok {
+				if artwork := source.artwork(); artwork != "" {
+					d.current.Artwork = artwork
+					if d.library != nil {
+						if saved, exists := d.library.Items[d.current.ID]; exists {
+							saved.Artwork = artwork
+							d.library.Items[d.current.ID] = saved
+						}
+					}
+				}
+			}
+		}
 		if d.library != nil && d.current != nil {
 			d.library.recordRecent(*d.current)
 			if err := d.library.commit(); err != nil {
 				d.storageError = "could not save recent media: " + err.Error()
 			}
 		}
+		if d.current != nil {
+			d.syncProviderProgress(*d.current, d.episodePosition(), d.episodeDuration, "started")
+		}
 		d.notifyCurrentItem()
 	}
+}
+
+func (d *Daemon) fallbackFromAudioOutput(reason string) bool {
+	if d.newPlayer != nil || d.audio.Device == "auto" || d.audioDeviceFallback || d.current == nil {
+		return false
+	}
+	position := d.episodePosition()
+	d.closePlayer()
+	d.activeAudioDevice = "auto"
+	d.audioDeviceFallback = true
+	d.storageError = fmt.Sprintf("audio device %q unavailable; using the system default", d.audio.Device)
+	if d.current.finite() {
+		d.episodeOffset = position
+	}
+	if err := d.startPlayback(); err != nil {
+		d.playbackFailed(reason + "; system default failed: " + err.Error())
+	}
+	return true
 }
 
 func (d *Daemon) updateNowPlaying(now streammeta.NowPlaying) {
@@ -580,10 +752,10 @@ func (d *Daemon) pause() string {
 		}
 	}
 	d.paused = true
-	d.saveCurrentProgress(false)
 	if d.state == "playing" {
 		d.state = "paused"
 	}
+	d.saveCurrentProgress(false)
 	return ok("paused")
 }
 
@@ -606,6 +778,9 @@ func (d *Daemon) resume() string {
 	d.paused = false
 	if d.state == "paused" {
 		d.state = "playing"
+	}
+	if d.current != nil {
+		d.syncProviderProgress(*d.current, d.episodePosition(), d.episodeDuration, "playing")
 	}
 	return ok("resumed")
 }
@@ -679,7 +854,7 @@ func (d *Daemon) equalizer() equalizerConfig {
 }
 
 func (d *Daemon) playbackSettings() playbackSettings {
-	settings := playbackSettings{Volume: d.volume, Notifications: d.notifications}
+	settings := playbackSettings{Volume: d.volume, Notifications: d.notifications, Audio: d.audio}
 	settings.setEqualizer(d.equalizer())
 	return settings
 }
@@ -809,7 +984,7 @@ func (d *Daemon) closePlayer() {
 }
 
 func (d *Daemon) kill() {
-	d.saveCurrentProgress(false)
+	d.saveCurrentProgress(false, "stopped")
 	if d.resolveCancel != nil {
 		d.resolveCancel()
 		d.resolveCancel = nil
@@ -828,6 +1003,8 @@ func (d *Daemon) kill() {
 		d.progressTimer = nil
 	}
 	d.episode = nil
+	d.providerCompleted = false
+	d.providerScrobbled = false
 	d.stationHistory, d.stationForward = nil, nil
 	d.current = nil
 	d.episodeOffset, d.episodeDuration = 0, 0
@@ -847,7 +1024,11 @@ func (d *Daemon) mediaState() media.State {
 	} else if d.paused || d.state == "paused" {
 		status = media.StatusPaused
 	}
-	state := media.State{Status: status, Volume: float64(d.volume) / 100}
+	audio := d.audio.status(d.activeAudioDevice)
+	state := media.State{
+		Status: status, Volume: float64(d.volume) / 100,
+		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
+	}
 	if d.muted {
 		state.Volume = 0
 	}
@@ -880,9 +1061,43 @@ func (d *Daemon) mediaState() media.State {
 }
 
 func (d *Daemon) updateMedia() {
+	d.reconcileQueueRevision()
 	if d.media != nil {
 		d.media.Update(d.mediaState())
 	}
+}
+
+func (d *Daemon) ensureQueueFingerprint() {
+	if d.queueFingerprint == "" {
+		d.queueFingerprint = d.currentQueueFingerprint()
+	}
+}
+
+func (d *Daemon) reconcileQueueRevision() {
+	fingerprint := d.currentQueueFingerprint()
+	if d.queueFingerprint == "" {
+		d.queueFingerprint = fingerprint
+		return
+	}
+	if fingerprint == d.queueFingerprint {
+		return
+	}
+	d.queueFingerprint = fingerprint
+	d.queueRevision++
+	if d.library == nil {
+		return
+	}
+	d.library.QueueRevision = d.queueRevision
+	if err := d.library.commit(); err != nil {
+		d.storageError = "could not save queue revision: " + err.Error()
+	}
+}
+
+func (d *Daemon) currentQueueFingerprint() string {
+	if d.library == nil {
+		return ""
+	}
+	return d.library.queueFingerprint()
 }
 
 func (d *Daemon) mediaCommand(command media.Command) {
@@ -967,23 +1182,28 @@ func (d *Daemon) previousStation() string {
 
 func (d *Daemon) status() string {
 	s := Status{
-		Item:         d.current,
-		Episode:      d.episode,
-		NowPlaying:   d.nowPlaying,
-		StorageError: d.storageError,
-		Version:      buildVersion(),
-		Protocol:     daemonProtocol,
-		Playing:      d.state == "playing",
-		Paused:       d.paused,
-		Volume:       d.volume,
-		Muted:        d.muted,
-		EQPreset:     d.equalizer().Preset,
-		EQBands:      d.equalizer().activeBands(),
-		State:        d.state,
-		Error:        d.lastError,
-		Retries:      d.retries,
-		RetryAt:      d.retryAt,
-		SleepUntil:   d.sleepUntil,
+		Revision:      d.runtimeRevision,
+		QueueRevision: d.queueRevision,
+		Item:          d.current,
+		Episode:       d.episode,
+		NowPlaying:    d.nowPlaying,
+		StorageError:  d.storageError,
+		Version:       buildVersion(),
+		BuildID:       buildIdentity(),
+		Protocol:      daemonProtocol,
+		Playing:       d.state == "playing",
+		Paused:        d.paused,
+		Volume:        d.volume,
+		Muted:         d.muted,
+		EQPreset:      d.equalizer().Preset,
+		EQBands:       d.equalizer().activeBands(),
+		Audio:         d.audio.status(d.activeAudioDevice),
+		Notifications: d.notifications,
+		State:         d.state,
+		Error:         d.lastError,
+		Retries:       d.retries,
+		RetryAt:       d.retryAt,
+		SleepUntil:    d.sleepUntil,
 	}
 	if s.State == "" {
 		s.State = "idle"
@@ -1050,7 +1270,9 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "favorites: %v\n", err)
 		storageError = "could not migrate favorites: " + err.Error()
 	}
-	d := &Daemon{volume: settings.Volume, eqPreset: settings.EQPreset, eqCustom: settings.EQBands, notifications: settings.Notifications, state: "idle", library: library, storageError: storageError}
+	d := &Daemon{volume: settings.Volume, eqPreset: settings.EQPreset, eqCustom: settings.EQBands, notifications: settings.Notifications, audio: settings.Audio, activeAudioDevice: settings.Audio.Device, state: "idle", library: library, storageError: storageError, runtimeRevision: uint64(time.Now().UnixNano()), queueRevision: library.QueueRevision}
+	d.ensureQueueFingerprint()
+	d.remote = newRemoteService(d)
 	mediaService, mediaErr := media.New(func(command media.Command) { go d.mediaCommand(command) })
 	if mediaErr != nil {
 		fmt.Fprintf(os.Stderr, "media controls: %v\n", mediaErr)
@@ -1089,6 +1311,16 @@ func runDaemon() {
 			d.mu.Lock()
 			d.updateMedia()
 			d.mu.Unlock()
+			d.remote.observe()
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			d.refreshAudioDevice(ctx)
+			cancel()
 		}
 	}()
 	if err := media.Run(mediaService, func() error { select {} }); err != nil {

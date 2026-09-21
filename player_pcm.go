@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,23 +21,25 @@ import (
 // decoder opens the resolved media stream. The bounded tap sees exactly the
 // samples delivered to mpv, and never performs analysis on the playback path.
 type pcmPlayer struct {
-	output    *mpvPlayer
-	pipe      *os.File
-	buffer    audio.Buffer
-	equalizer *audio.Equalizer
-	ctx       context.Context
-	cancel    context.CancelFunc
-	event     chan playerEvent
-	watchDone chan struct{}
-	once      sync.Once
-	loaded    bool // commands are serialized by the daemon
-	decoderMu sync.Mutex
-	decoders  sync.WaitGroup
-	prepared  *preparedDecoder
-	active    *preparedDecoder
-	offset    time.Duration
-	base      time.Duration
-	finite    bool
+	output     *mpvPlayer
+	pipe       *os.File
+	buffer     audio.Buffer
+	equalizer  *audio.Equalizer
+	ctx        context.Context
+	cancel     context.CancelFunc
+	event      chan playerEvent
+	watchDone  chan struct{}
+	once       sync.Once
+	loaded     bool // commands are serialized by the daemon
+	decoderMu  sync.Mutex
+	decoders   sync.WaitGroup
+	prepared   *preparedDecoder
+	active     *preparedDecoder
+	offset     time.Duration
+	base       time.Duration
+	finite     bool
+	sampleRate int
+	audio      AudioSettings
 }
 
 type preparedDecoder struct {
@@ -53,6 +56,7 @@ type preparedDecoder struct {
 	complete bool
 	err      error
 	duration time.Duration
+	artwork  string
 }
 
 func (decoder *preparedDecoder) start() {
@@ -81,21 +85,21 @@ func startPCMPlayer(volume int, muted, paused bool) (player, error) {
 	return newPCMPlayer(volume, muted, paused, 0, false)
 }
 
-func startPCMPlayerAt(volume int, muted, paused bool, offset time.Duration) (player, error) {
-	return newPCMPlayer(volume, muted, paused, offset, true)
+func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite bool) (player, error) {
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		settings = defaultPlaybackSettings()
+	}
+	return startPCMPlayerWithAudio(volume, muted, paused, offset, finite, settings.Audio)
 }
 
-func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite bool) (player, error) {
+func startPCMPlayerWithAudio(volume int, muted, paused bool, offset time.Duration, finite bool, settings AudioSettings) (player, error) {
 	read, write, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	output, err := startMPV(volume, muted, paused, read, []string{
-		"--demuxer=rawaudio", "--demuxer-rawaudio-format=floatle",
-		"--demuxer-rawaudio-rate=48000", "--demuxer-rawaudio-channels=stereo",
-		"--cache=no", "--demuxer-readahead-secs=0", "--demuxer-max-bytes=16384",
-		"--audio-buffer=0.1", "--ytdl=no", "--loop-file=no",
-	})
+	sampleRate, mpvOptions, _ := audioSettingsArgs(settings)
+	output, err := startMPV(volume, muted, paused, read, mpvOptions)
 	read.Close()
 	if err != nil {
 		write.Close()
@@ -103,9 +107,9 @@ func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite b
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &pcmPlayer{output: output, pipe: write, ctx: ctx, cancel: cancel,
-		offset: offset, finite: finite,
-		equalizer: audio.NewEqualizer(audio.SampleRate),
-		event:     make(chan playerEvent, 8), watchDone: make(chan struct{})}
+		offset: offset, finite: finite, sampleRate: sampleRate, audio: normalizeAudioSettings(settings),
+		buffer: audio.NewBuffer(sampleRate), equalizer: audio.NewEqualizer(sampleRate),
+		event: make(chan playerEvent, 8), watchDone: make(chan struct{})}
 	go p.watch()
 	return p, nil
 }
@@ -152,6 +156,7 @@ func (p *pcmPlayer) watch() {
 		select {
 		case e := <-p.output.events():
 			if e.err != "" {
+				e.output = true
 				emit(e)
 				return
 			}
@@ -260,13 +265,24 @@ type resolvedAudio struct {
 	URL string `json:"url"`
 	// Headers contains the extractor's required request headers.
 	Headers map[string]string `json:"http_headers"`
+	// Artwork is a safely cached provider image for the active item.
+	Artwork string `json:"artwork,omitempty"`
 }
 
+var (
+	findExtractor        = findYtdl
+	runDiagnosticCommand = diagnosticCommandContext
+)
+
 func resolveAudio(ctx context.Context, source string) (resolvedAudio, error) {
+	return resolveAudioWithCookies(ctx, source, "")
+}
+
+func resolveAudioWithCookies(ctx context.Context, source, cookiesFrom string) (resolvedAudio, error) {
 	if err := ctx.Err(); err != nil {
 		return resolvedAudio{}, err
 	}
-	_, err := url.Parse(source)
+	u, err := url.Parse(source)
 	if err != nil {
 		// Local filenames can contain percent signs that are not URL escapes.
 		if !strings.Contains(source, "://") {
@@ -274,20 +290,28 @@ func resolveAudio(ctx context.Context, source string) (resolvedAudio, error) {
 		}
 		return resolvedAudio{}, err
 	}
+	if u.Scheme == "chill-provider" {
+		return resolveProviderAudio(ctx, source)
+	}
 	// Local media and direct radio URLs do not need extraction. YouTube page
 	// URLs do; yt-dlp supplies the signed URL and required HTTP headers together.
 	if !sourceNeedsYtdl(source) {
 		return resolvedAudio{URL: source}, nil
 	}
 	mpv, _ := exec.LookPath("mpv")
-	extractor := findYtdl(mpv)
+	extractor := findExtractor(mpv)
 	if extractor == "" {
 		return resolvedAudio{}, fmt.Errorf("yt-dlp not found")
 	}
-	stdout, stderr, err := diagnosticCommandContext(ctx, extractor, 35*time.Second,
+	args := []string{
 		"--ignore-config", "--no-playlist", "--no-progress", "--socket-timeout", "10",
-		"--retries", "0", "--format", "bestaudio/best", "--print",
-		`{"url":%(url)j,"http_headers":%(http_headers)j}`, "--", source)
+		"--retries", "0", "--format", extractorAudioFormat(source), "--print", `{"url":%(url)j,"http_headers":%(http_headers)j}`,
+	}
+	if cookiesFrom != "" {
+		args = append(args, "--cookies-from-browser", cookiesFrom)
+	}
+	args = append(args, "--", source)
+	stdout, stderr, err := runDiagnosticCommand(ctx, extractor, 35*time.Second, args...)
 	if err != nil {
 		return resolvedAudio{}, fmt.Errorf("stream resolution: %w; %s", err, stderr)
 	}
@@ -301,6 +325,17 @@ func resolveAudio(ctx context.Context, source string) (resolvedAudio, error) {
 	return resolved, nil
 }
 
+func extractorAudioFormat(source string) string {
+	u, err := url.Parse(source)
+	if err == nil {
+		host := strings.ToLower(u.Hostname())
+		if host == "mixcloud.com" || strings.HasSuffix(host, ".mixcloud.com") {
+			return "bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio[protocol=m3u8_native]/bestaudio[protocol=m3u8]/bestaudio/best"
+		}
+	}
+	return "bestaudio/best"
+}
+
 func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
 	resolved, err := resolveAudio(decoder.ctx, decoder.source)
 	if err != nil {
@@ -309,6 +344,9 @@ func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
 	if err := decoder.ctx.Err(); err != nil {
 		return err
 	}
+	decoder.mu.Lock()
+	decoder.artwork = resolved.Artwork
+	decoder.mu.Unlock()
 	logLevel := "error"
 	if !decoder.finite {
 		logLevel = "info"
@@ -348,8 +386,10 @@ func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
 	if decoder.offset > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.6f", decoder.offset.Seconds()))
 	}
-	args = append(args, "-i", input, "-map", "0:a:0", "-vn", "-sn", "-dn",
-		"-ac", "2", "-ar", "48000", "-c:a", "pcm_f32le", "-f", "f32le", "pipe:1")
+	_, _, filterArgs := audioSettingsArgs(p.audio)
+	args = append(args, "-i", input, "-map", "0:a:0", "-vn", "-sn", "-dn")
+	args = append(args, filterArgs...)
+	args = append(args, "-ac", "2", "-ar", strconv.Itoa(p.sampleRate), "-c:a", "pcm_f32le", "-f", "f32le", "pipe:1")
 	cmd := exec.Command("ffmpeg", args...)
 	var diagnostics tailBuffer
 	cmd.Stderr = newMetadataDiagnostics(&diagnostics, p.emitNowPlaying)
@@ -410,7 +450,7 @@ func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
 	}
 	err = cmd.Wait()
 	decoder.mu.Lock()
-	decoder.duration = time.Duration(float64(written) / (48000 * 2 * 4) * float64(time.Second))
+	decoder.duration = time.Duration(float64(written) / (float64(p.sampleRate) * 2 * 4) * float64(time.Second))
 	decoder.mu.Unlock()
 	if decoder.ctx.Err() != nil {
 		return decoder.ctx.Err()
@@ -419,4 +459,16 @@ func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
 		return fmt.Errorf("audio decoder: %w; %s", err, diagnostics.String())
 	}
 	return copyErr
+}
+
+func (p *pcmPlayer) artwork() string {
+	p.decoderMu.Lock()
+	decoder := p.active
+	p.decoderMu.Unlock()
+	if decoder == nil {
+		return ""
+	}
+	decoder.mu.Lock()
+	defer decoder.mu.Unlock()
+	return decoder.artwork
 }

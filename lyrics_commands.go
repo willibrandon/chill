@@ -14,7 +14,11 @@ func currentLyrics(ctx context.Context) (lyrics.Result, error) {
 	if err != nil {
 		return lyrics.Result{}, err
 	}
-	if status != nil && status.Item != nil && status.Item.Kind == MediaTrack {
+	return lyricsFromStatus(ctx, status)
+}
+
+func lyricsFromStatus(ctx context.Context, status *Status) (lyrics.Result, error) {
+	if status != nil && status.Item != nil && (status.Item.Kind == MediaTrack || status.Item.Kind == MediaProvider) {
 		item := status.Item
 		if item.EmbeddedLyrics != "" {
 			return lyrics.Result{Track: item.Title, Artist: item.Artist, Album: item.Album, Plain: item.EmbeddedLyrics}, nil

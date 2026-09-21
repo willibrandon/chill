@@ -235,6 +235,8 @@ type playbackSettings struct {
 	EQBands audio.EqualizerBands `json:"eq_bands"`
 	// Notifications enables desktop alerts when track metadata changes.
 	Notifications bool `json:"notifications,omitempty"`
+	// Audio contains durable output routing and quality preferences.
+	Audio AudioSettings `json:"audio"`
 }
 
 func volumePath() string {
@@ -246,7 +248,7 @@ func volumePath() string {
 }
 
 func defaultPlaybackSettings() playbackSettings {
-	return playbackSettings{Volume: defaultVolume, EQPreset: equalizerPresets[0].Name}
+	return playbackSettings{Volume: defaultVolume, EQPreset: equalizerPresets[0].Name, Audio: defaultAudioSettings()}
 }
 
 func normalizePlaybackSettings(settings playbackSettings) playbackSettings {
@@ -255,6 +257,7 @@ func normalizePlaybackSettings(settings playbackSettings) playbackSettings {
 	}
 	eq := normalizeEqualizerConfig(equalizerConfig{Preset: settings.EQPreset, Custom: settings.EQBands})
 	settings.EQPreset, settings.EQBands = eq.Preset, eq.Custom
+	settings.Audio = normalizeAudioSettings(settings.Audio)
 	return settings
 }
 

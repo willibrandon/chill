@@ -50,7 +50,11 @@ func sendRawCommandContext(ctx context.Context, cmd string) (string, error) {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	deadline := 5 * time.Second
+	if cmd == "stop" || cmd == "quit" {
+		deadline = 20 * time.Second
+	}
+	conn.SetDeadline(time.Now().Add(deadline))
 
 	_, err = conn.Write([]byte(cmd + "\n"))
 	if err != nil {

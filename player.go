@@ -22,6 +22,7 @@ type playerEvent struct {
 	loaded     bool
 	ended      bool
 	err        string
+	output     bool
 	nowPlaying *streammeta.NowPlaying
 }
 

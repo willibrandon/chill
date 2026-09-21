@@ -48,6 +48,8 @@ type radioResultMsg struct {
 }
 
 func (t *tui) openRadio() tea.Cmd {
+	t.closeProviders()
+	t.closeAudio()
 	r := &t.radio
 	r.open = true
 	t.viz.focused, t.viz.fullscreen = false, false
@@ -100,6 +102,9 @@ func (t *tui) radioResult(msg radioResultMsg) tea.Cmd {
 	}
 	r.loading = false
 	if msg.err != nil {
+		if msg.library != nil {
+			r.library = *msg.library
+		}
 		r.note = msg.err.Error()
 		return nil
 	}

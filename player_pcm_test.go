@@ -169,6 +169,17 @@ func TestResolveDirectAudioAndCancellation(t *testing.T) {
 	}
 }
 
+// TestExtractorAudioFormatAvoidsMixcloudDASH guards FFmpeg-compatible resolution.
+func TestExtractorAudioFormatAvoidsMixcloudDASH(t *testing.T) {
+	mixcloud := extractorAudioFormat("https://www.mixcloud.com/listener/show/")
+	if !strings.HasPrefix(mixcloud, "bestaudio[protocol=https]") {
+		t.Fatalf("Mixcloud format selector = %q", mixcloud)
+	}
+	if format := extractorAudioFormat("https://www.youtube.com/watch?v=test"); format != "bestaudio/best" {
+		t.Fatalf("YouTube format selector = %q", format)
+	}
+}
+
 // TestPCMLocalTransitionKeepsOutputAndUsesPreload checks the gapless local path.
 func TestPCMLocalTransitionKeepsOutputAndUsesPreload(t *testing.T) {
 	for _, name := range []string{"mpv", "ffmpeg"} {
