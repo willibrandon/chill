@@ -1,5 +1,7 @@
 # Radio discovery
 
+![Browsing internet radio](../assets/radio.png)
+
 Run `chill radio`, enter `radio` in the REPL, or press F5. The browser opens on
 favorites, recently heard tracks, optional nearby suggestions, pinned views,
 four charts, countries, genres and search. Directory playback does not modify

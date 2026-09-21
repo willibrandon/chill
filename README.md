@@ -284,7 +284,8 @@ Listening progress is saved automatically. No account or API key.
 Use `chill podcasts --help` for CLI commands, including search, feeds,
 subscriptions, and queueing. `--json` is available for scripting.
 
-![Browsing podcast episodes in Chill](assets/podcasts.png)
+See [Podcasts](docs/podcasts.md) for every browser key, command, playback rule,
+and saved-data detail.
 
 ### Visualizers
 
@@ -293,6 +294,9 @@ Press **F2** or type `viz` to open. While focused, **v** cycles modes,
 **V** toggles fullscreen, and **Enter** returns to the prompt.
 
 Use `viz led` to pick a mode, `viz list` to see them all, or `viz off` to close.
+
+See [Visualizer architecture](docs/visualizers.md) for the audio tap, rendering,
+layouts, and performance design.
 
 ## Foreground Mode
 

@@ -1,5 +1,7 @@
 # Podcasts
 
+![Browsing podcast episodes](../assets/podcasts.png)
+
 Run `chill podcasts`, type `podcasts` in the REPL, or press F3. The browser has
 Top Shows, Categories, Subscriptions, and Search. The top chart defaults to the
 US; `chill podcasts country gb` saves a different two-letter country code.

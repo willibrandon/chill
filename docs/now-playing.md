@@ -1,5 +1,7 @@
 # Now playing
 
+![Reading lyrics for the current live track](../assets/lyrics.png)
+
 Live radio has no universal metadata channel, so Chill handles the formats used
 in practice. For direct HTTP audio it asks for ICY metadata and removes metadata
 blocks from the same connection that feeds FFmpeg. This preserves the one-stream

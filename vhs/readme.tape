@@ -1,13 +1,11 @@
 # Capture the REPL for the README.
-# Build first: go build
-# Uses ./chill on Unix or ./chill.exe under WSL.
 # This plays chillhop, shows its live spectrum, and stops it again.
 
+Require go
 Require mpv
 Require ffmpeg
 Require yt-dlp
 
-Set Shell bash
 Set FontSize 14
 Set Width 1200
 Set Height 720
@@ -17,9 +15,12 @@ Set WindowBar Colorful
 Set TypingSpeed 0ms
 Set Framerate 30
 Set WaitTimeout 60s
+Env NO_COLOR ""
+Env CLICOLOR_FORCE "1"
+Env COLORTERM "truecolor"
 
 Hide
-Type "if [ -x ./chill ]; then ./chill -i; else ./chill.exe -i; fi"
+Type "go run . -i"
 Enter
 Wait+Screen /chill>/
 Show
@@ -38,7 +39,7 @@ Sleep 500ms
 
 Type "viz spectrum"
 Enter
-Wait+Screen /spectrum · 1\/31 · source audio/
+Wait+Screen /spectrum · 1\/31 · post-EQ audio/
 Wait+Screen /[▁▂▃▄▅▆▇█]/
 Enter
 Wait+Screen /F2 visualizer/

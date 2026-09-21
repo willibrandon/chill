@@ -1,9 +1,8 @@
-# Build with go build, then run from the repository root.
 # Browses a public feed, subscribes, plays briefly, and stops playback.
+Require go
 Require mpv
 Require ffmpeg
 Require ffprobe
-Set Shell bash
 Set FontSize 14
 Set Width 1200
 Set Height 720
@@ -13,9 +12,12 @@ Set WindowBar Colorful
 Set TypingSpeed 0ms
 Set Framerate 30
 Set WaitTimeout 60s
+Env NO_COLOR ""
+Env CLICOLOR_FORCE "1"
+Env COLORTERM "truecolor"
 
 Hide
-Type "if [ -x ./chill ]; then ./chill -i; else ./chill.exe -i; fi"
+Type "go run . -i"
 Enter
 Wait+Screen /chill>/
 Show

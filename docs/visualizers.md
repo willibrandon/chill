@@ -1,5 +1,7 @@
 # REPL visualizer architecture
 
+![Live spectrum visualization in the REPL](../assets/chill.png)
+
 ## Audio ownership
 
 The daemon owns playback for the lifetime of a station. `pcmPlayer` implements

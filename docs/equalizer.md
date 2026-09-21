@@ -1,5 +1,7 @@
 # Equalizer architecture
 
+![Editing the ten-band equalizer](../assets/equalizer.png)
+
 ## Signal path
 
 Every radio station and podcast uses the same 48 kHz stereo float32 PCM path:
