@@ -106,6 +106,25 @@ func TestRestoreDoesNotRestartExpiredSleepTimer(t *testing.T) {
 	}
 }
 
+// TestUniversalPlaybackSnapshotPreservesQueueModesAndPosition checks finite-media handoff.
+func TestUniversalPlaybackSnapshotPreservesQueueModesAndPosition(t *testing.T) {
+	withConfigDir(t)
+	current := testTrack("/music/current.flac", "Current")
+	next := testTrack("/music/next.flac", "Next")
+	snapshot, err := snapshotPlayback(Status{Item: &current, State: "paused", Paused: true, Position: 42, Speed: 1.25,
+		Queue: []MediaItem{next}, Shuffle: true, Repeat: "all", Volume: 48}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := fakeDaemon(t)
+	data, _ := json.Marshal(snapshot)
+	wantReply(t, d.execute("restore", string(data)), true, "restored")
+	status := daemonStatus(t, d)
+	if status.Item == nil || status.Item.ID != current.ID || status.Position != 42 || status.Speed != 1.25 || !status.Paused || !status.Shuffle || status.Repeat != "all" || len(status.Queue) != 1 || status.Queue[0].ID != next.ID {
+		t.Fatalf("restored universal state = %+v", status)
+	}
+}
+
 // TestDaemonLockReleasedOnClose checks closing a lock permits the next client to acquire it.
 func TestDaemonLockReleasedOnClose(t *testing.T) {
 	withConfigDir(t)

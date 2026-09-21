@@ -1,6 +1,6 @@
 # chill
 
-Terminal radio and podcast player.
+Terminal audio, radio, and podcast player.
 
 ![chill playing chillhop with a live spectrum visualizer and command suggestions in the REPL](https://raw.githubusercontent.com/willibrandon/chill/main/assets/chill.png)
 
@@ -65,44 +65,39 @@ Use `chill update` for Go installs and release binaries,
 ## Usage
 
 ```bash
-chill                    # open the interactive REPL
-chill chillhop           # play specific station
-chill -i                 # same as chill
-chill podcasts           # browse podcasts
-chill podcasts --help    # podcast CLI commands
-chill radio              # browse internet radio
-chill radio search jazz  # search stations
-chill radio top --play 1 # play the first result
-chill history            # recently heard live tracks
-chill lyrics             # lyrics for the current live track
-chill notifications on   # opt in to track-change notifications
-chill seek -30           # jump back 30 seconds in an episode
-chill speed 1.5          # podcast playback speed
-chill --skip             # skip to random station
-chill --toggle           # pause/resume, or play the default station when stopped
-chill --vol 60           # set volume (also +5, -10, up, down)
-chill eq Rock            # select an equalizer preset
-chill eq --band 1k +3    # edit one band and switch to Custom
-chill eq list            # list every built-in preset
-chill --eq Rock --fg     # start foreground playback with a preset
-chill --mute             # toggle mute
-chill --status           # show what's playing
-chill --status --json    # show status as JSON
-chill doctor             # check mpv, FFmpeg, yt-dlp, runtime, and daemon versions
-chill doctor --stations  # check station streams
-chill doctor --stream n  # check one station
-chill doctor --logs      # show startup logs
-chill --stop             # stop playback
-chill --list             # show all stations
-chill add n url desc     # save your own station
-chill remove n           # remove a custom station or restore a built-in
-chill default n          # choose the station played by chill
-chill --sleep 45m        # stop playback after 45 minutes
-chill --sleep off        # cancel the sleep timer
-chill --version          # show version
-chill --help             # show help
-chill update             # install the latest release
-chill --fg               # run in foreground (no daemon)
+chill                         # open the interactive REPL
+chill chillhop                # play a station
+chill song.flac               # play a local track
+chill ~/Music                 # recursively play a folder
+chill album.m3u --fg          # play a playlist in the foreground
+chill open                    # browse files, queues, and playlists
+chill queue next song.flac    # put a track next
+chill queue move 4 1          # reorder pending media
+chill playlist save commute   # save the current queue
+chill playlist import mix.pls # import M3U, M3U8, or PLS
+chill library favorites       # list favorite media
+chill podcasts                # browse podcasts and the listening inbox
+chill podcasts sync           # refresh subscriptions and automatic downloads
+chill podcasts downloads      # show offline download progress
+chill radio                   # browse internet radio
+chill radio search jazz       # search stations
+chill history                 # recently heard live tracks
+chill lyrics                  # lyrics for the current track
+chill notifications on        # opt in to track-change notifications
+chill seek -30                # jump back 30 seconds
+chill speed 1.5               # finite-media playback speed
+chill shuffle on              # shuffle the universal queue
+chill repeat all              # repeat the complete playback cycle
+chill --toggle                # pause/resume, or play the default station when stopped
+chill --vol 60                # set volume (also +5, -10, up, down)
+chill eq Rock                 # select an equalizer preset
+chill eq --band 1k +3         # edit one band and switch to Custom
+chill --status --json         # show status and queue state as JSON
+chill doctor                  # check dependencies, runtime, and daemon versions
+chill --sleep 45m             # stop playback after 45 minutes
+chill --stop                  # stop playback
+chill --help                  # show help
+chill update                  # install the latest release
 ```
 
 ## Architecture
@@ -118,13 +113,16 @@ yt-dlp resolves → FFmpeg decodes → 10-band EQ → daemon PCM pipe → mpv au
                                       FFT / stereo levels
                                            │
 CLI/REPL ←── control IPC ──→ daemon ───── snapshots ──→ REPL visualizer
+                               ↑
+             durable universal queue, playlists, and podcast downloads
 ```
 
 After an update, the next control command restarts an older daemon and restores
 your playback settings. Volume, the active EQ preset, your Custom curve, and the
 notification preference are saved between sessions.
 
-The daemon decodes one stream into 48 kHz stereo PCM. Visualizers analyze the
+The daemon decodes one source into 48 kHz stereo PCM. Local albums preload the
+next decoder and keep the PCM output open across track boundaries. Visualizers analyze the
 post-EQ samples sent to playback; they do not open another network stream or
 capture system audio. FFT work runs only while a REPL is subscribed. `doctor`
 checks the new FFmpeg dependency as well as mpv, yt-dlp, and the YouTube
@@ -209,7 +207,8 @@ Quitting also cancels diagnostics; music keeps playing.
 | `F3` | open podcasts or return to the prompt |
 | `F4` | open the equalizer or return to the prompt |
 | `F5` | open radio discovery or return to the prompt |
-| `F6` | show lyrics for the current live track or return to the prompt |
+| `F6` | show lyrics for the current track or return to the prompt |
+| `F7` | browse the universal queue, saved playlists, local files, favorites, bookmarks, and recent media |
 | `Ctrl+Q` | quit, music keeps playing |
 
 ### Equalizer
@@ -237,9 +236,11 @@ live-update design.
 
 Press **F5** or run `chill radio` to browse top-voted, popular, trending, and
 random internet radio. Search by name, country, region, language, genre, or tag;
-favorite stations locally; pin useful country and tag views; and replay a
-station from Recently Heard. The browser supports filtering, paging, refresh,
-sort changes, and direct playback without adding a station to your config.
+favorite stations in the universal library; pin useful country and tag views;
+and replay a station from Recently Heard. F5 shows the station subset of the
+same Favorites collection available in F7. The browser supports filtering,
+paging, refresh, sort changes, and direct playback without adding a station to
+your config.
 
 `chill radio --help` lists the scriptable commands and options. Result lists
 support `--json`, `--play <number>`, `--favorite <number>`, and `--fg`.
@@ -267,8 +268,8 @@ privacy, notifications, and history behavior.
 Chill registers a native media session during daemon and foreground playback.
 Headset buttons, media keys, lock-screen controls, desktop media widgets, and
 supported volume or seek controls operate the same state as the CLI and REPL.
-Radio exposes next and previous station navigation; podcasts expose queue
-navigation and absolute seeking. Metadata, artwork, pause state, and podcast
+Radio exposes next and previous station navigation; finite media exposes queue
+navigation and absolute seeking. Metadata, artwork, pause state, and playback
 position stay synchronized.
 
 See [System media controls](docs/media-controls.md) for platform behavior.
@@ -276,7 +277,8 @@ See [System media controls](docs/media-controls.md) for platform behavior.
 ### Podcasts
 
 Press **F3** or run `chill podcasts` for Apple's top shows, 19 categories,
-search, and your subscriptions. You can also open any podcast RSS URL.
+search, subscriptions, the listening inbox, and managed offline downloads. You
+can also open any podcast RSS URL.
 **Enter** opens a show or plays an episode; **f** subscribes locally.
 **Shift+←/→** skips 30 seconds, **Space** pauses, and **F3** returns to the prompt.
 Listening progress is saved automatically. No account or API key.
@@ -286,6 +288,23 @@ subscriptions, and queueing. `--json` is available for scripting.
 
 See [Podcasts](docs/podcasts.md) for every browser key, command, playback rule,
 and saved-data detail.
+
+### Local library, queue, and playlists
+
+Files, folders, direct audio URLs, stations, and podcast episodes share one
+durable queue. `play next`, append, replace, search, reorder, remove, undo,
+shuffle, repeat-one, and repeat-all therefore behave the same for mixed media.
+Saved playlists retain complete media metadata and import or export M3U, M3U8,
+and PLS files.
+
+Local tags supply title, artist, album, genre, embedded artwork, duration, and
+embedded lyrics. Playback progress, favorites, bookmarks, and the latest 200
+items are saved locally. Folder loading is recursive, and consecutive local
+tracks use gapless decoder preloading.
+
+Press **F7** or run `chill open` for the full-screen browser. See [Library,
+queues, and playlists](docs/library.md) for every command, key, format, and
+saved-data rule.
 
 ### Visualizers
 
@@ -309,8 +328,12 @@ sessions.
 | `q` | quit |
 | `m` | mute |
 | `y` | show or hide lyrics |
+| `f` / `B` | toggle favorite / bookmark |
 | `9` / `0` | volume down / up |
 | `←` / `→` | seek |
+| `<` / `>` | previous / next queue item |
+| `[` / `]` | decrease / increase speed |
+| `z` / `R` | toggle shuffle / cycle repeat mode |
 | `h` / `l` | select EQ band |
 | `j` / `k` | decrease / increase the selected band |
 | `x` | zero the selected band |

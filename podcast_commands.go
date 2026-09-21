@@ -30,6 +30,13 @@ func podcastHelp(colored bool) string {
 		{"subscribe <feed-url>", "save a show locally"},
 		{"unsubscribe <feed-url>", "remove a subscription"},
 		{"subscriptions", "list saved shows"},
+		{"inbox [--played|--all]", "episodes across subscriptions"},
+		{"inbox queue", "queue the newest unplayed episode from each show"},
+		{"sync", "refresh the subscription inbox and automatic downloads"},
+		{"download <feed-url> [number]", "save an episode for offline playback"},
+		{"downloads", "show offline download state"},
+		{"downloads remove|retry|pin <number>", "manage an offline episode"},
+		{"auto [on|off]", "show or control automatic downloads"},
 		{"country [code]", "show or save the chart country"},
 		{"play <feed-url> [number]", "play an episode (default: newest)"},
 		{"latest <feed-url>", "play the newest episode"},
@@ -40,6 +47,13 @@ func podcastHelp(colored bool) string {
 	printStyledHelpSection(&b, "Options", [][2]string{
 		{"--json", "print machine-readable results"},
 		{"--restart", "start an episode from the beginning"},
+		{"--fg", "play without the background daemon"},
+		{"--all", "include played episodes in the inbox"},
+		{"--played", "show only played inbox episodes"},
+		{"--latest <count>", "automatic downloads per subscribed show (1-20)"},
+		{"--concurrency <count>", "simultaneous downloads (1-8)"},
+		{"--quota <size>", "managed storage limit, such as 10GB"},
+		{"--retain <days>", "days to keep played downloads (0 keeps them)"},
 		{"--country <code>", "use this country for top shows"},
 		{"--help", "show this help"},
 	}, colored)
@@ -103,7 +117,7 @@ func clientSeek(arg string) (string, error) {
 		return "", err
 	}
 	if !isDaemonRunning() {
-		return "", fmt.Errorf("no podcast playing")
+		return "", fmt.Errorf("no finite media playing")
 	}
 	return ask("seek " + arg)
 }
@@ -121,6 +135,9 @@ func clientPodcastControl(action, arg string) (string, error) {
 }
 
 func newestEpisode(episodes []podcast.Episode) int {
+	if len(episodes) == 0 {
+		return -1
+	}
 	index := 0
 	for i, e := range episodes {
 		if e.Published.After(episodes[index].Published) {
@@ -130,13 +147,35 @@ func newestEpisode(episodes []podcast.Episode) int {
 	return index
 }
 
+func parseByteSize(value string) (int64, error) {
+	raw := strings.ToUpper(strings.TrimSpace(value))
+	multiplier := int64(1)
+	for _, unit := range []struct {
+		suffix string
+		mult   int64
+	}{{"TB", 1 << 40}, {"GB", 1 << 30}, {"MB", 1 << 20}, {"KB", 1 << 10}, {"T", 1 << 40}, {"G", 1 << 30}, {"M", 1 << 20}, {"K", 1 << 10}} {
+		if strings.HasSuffix(raw, unit.suffix) {
+			raw = strings.TrimSpace(strings.TrimSuffix(raw, unit.suffix))
+			multiplier = unit.mult
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(raw, 64)
+	if err != nil || n <= 0 || n > float64(1<<50)/float64(multiplier) {
+		return 0, fmt.Errorf("quota needs a size such as 10GB")
+	}
+	return int64(n * float64(multiplier)), nil
+}
+
 func runPodcastCommand(ctx context.Context, args []string) (string, error) {
 	return runPodcast(ctx, args, false)
 }
 
 // runPodcast keeps help presentation separate from command and JSON results.
 func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, error) {
-	jsonOutput, restart, country := false, false, ""
+	jsonOutput, restart, foreground, inboxAll, inboxPlayed, country := false, false, false, false, false, ""
+	latest, concurrency, retain := -1, -1, -1
+	quota := int64(-1)
 	var words []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -146,6 +185,38 @@ func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, e
 			jsonOutput = true
 		case "--restart":
 			restart = true
+		case "--fg":
+			foreground = true
+		case "--all":
+			inboxAll = true
+		case "--played":
+			inboxPlayed = true
+		case "--latest", "--concurrency", "--quota", "--retain":
+			option := args[i]
+			i++
+			if i >= len(args) {
+				return "", fmt.Errorf("%s needs a value", option)
+			}
+			if option == "--quota" {
+				var parseErr error
+				quota, parseErr = parseByteSize(args[i])
+				if parseErr != nil {
+					return "", parseErr
+				}
+				continue
+			}
+			value, parseErr := strconv.Atoi(args[i])
+			if parseErr != nil {
+				return "", fmt.Errorf("%s needs a number", option)
+			}
+			switch option {
+			case "--latest":
+				latest = value
+			case "--concurrency":
+				concurrency = value
+			case "--retain":
+				retain = value
+			}
 		case "--country":
 			i++
 			if i >= len(args) {
@@ -234,6 +305,137 @@ func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, e
 		if err == nil {
 			formatShows(l.Subscriptions)
 		}
+	case "inbox":
+		if len(rest) > 1 || len(rest) == 1 && strings.ToLower(rest[0]) != "queue" {
+			return "", fmt.Errorf("usage: podcasts inbox [queue] [--played|--all]")
+		}
+		l, e := fetchPodcastLibrary()
+		if e != nil {
+			return "", e
+		}
+		episodes := make([]podcast.Episode, 0, len(l.Inbox))
+		for _, episode := range l.Inbox {
+			played := l.Progress[episode.Key()].Played
+			if inboxAll || inboxPlayed && played || !inboxPlayed && !played {
+				episodes = append(episodes, episode)
+			}
+		}
+		if len(rest) == 1 {
+			newest := make([]podcast.Episode, 0, len(l.Subscriptions))
+			seen := map[string]bool{}
+			for _, episode := range episodes {
+				identity := episode.FeedURL
+				if identity == "" {
+					identity = episode.Show
+				}
+				if !seen[identity] {
+					seen[identity] = true
+					newest = append(newest, episode)
+				}
+			}
+			if len(newest) == 0 {
+				return "inbox has no matching episodes", nil
+			}
+			items := make([]MediaItem, len(newest))
+			for i, episode := range newest {
+				items[i] = itemFromEpisode(episode)
+			}
+			out, queueErr := sendItems("queue-append", items)
+			return out, queueErr
+		}
+		result = episodes
+		for i, episode := range episodes {
+			state := ""
+			if download, ok := l.Downloads[episode.Key()]; ok {
+				state = " [" + download.State + "]"
+			}
+			lines = append(lines, fmt.Sprintf("%3d  %s  %s — %s%s", i+1, episode.Published.Format("2006-01-02"), episode.Show, episode.Title, state))
+		}
+	case "sync":
+		if len(rest) != 0 {
+			return "", fmt.Errorf("usage: podcasts sync")
+		}
+		if err = ensureDaemon(); err == nil {
+			var out string
+			out, err = ask("podcast-sync")
+			result, lines = out, []string{out}
+		}
+	case "downloads":
+		l, e := fetchPodcastLibrary()
+		if e != nil {
+			return "", e
+		}
+		downloads := make([]episodeDownload, 0, len(l.Downloads))
+		for _, download := range l.Downloads {
+			downloads = append(downloads, download)
+		}
+		slices.SortFunc(downloads, func(a, b episodeDownload) int { return b.Updated.Compare(a.Updated) })
+		if len(rest) > 0 {
+			if len(rest) != 2 {
+				return "", fmt.Errorf("usage: podcasts downloads [remove|retry|pin <number>]")
+			}
+			index, e := strconv.Atoi(rest[1])
+			if e != nil || index < 1 || index > len(downloads) {
+				return "", fmt.Errorf("download number is out of range")
+			}
+			action := map[string]string{"remove": "podcast-download-remove", "retry": "podcast-download-retry", "pin": "podcast-download-pin"}[strings.ToLower(rest[0])]
+			if action == "" {
+				return "", fmt.Errorf("download action must be remove, retry, or pin")
+			}
+			if err = ensureDaemon(); err == nil {
+				var out string
+				out, err = ask(action + " " + downloads[index-1].Episode.Key())
+				result, lines = out, []string{out}
+			}
+			break
+		}
+		result = downloads
+		for i, download := range downloads {
+			size := fmt.Sprintf("%d", download.Bytes)
+			if download.Total > 0 {
+				size = fmt.Sprintf("%d/%d", download.Bytes, download.Total)
+			}
+			pin := ""
+			if download.Pinned {
+				pin = " pinned"
+			}
+			lines = append(lines, fmt.Sprintf("%3d  %-11s %12s  %s — %s%s", i+1, download.State, size, download.Episode.Show, download.Episode.Title, pin))
+		}
+	case "auto":
+		l, e := fetchPodcastLibrary()
+		if e != nil {
+			return "", e
+		}
+		settings := l.DownloadSettings
+		changed := latest >= 0 || concurrency >= 0 || quota >= 0 || retain >= 0
+		if latest >= 0 {
+			settings.Latest = latest
+		}
+		if concurrency >= 0 {
+			settings.Concurrency = concurrency
+		}
+		if quota >= 0 {
+			settings.MaxBytes = quota
+		}
+		if retain >= 0 {
+			settings.RetainPlayedDays = retain
+		}
+		if len(rest) == 0 && !changed {
+			result = settings
+			lines = []string{fmt.Sprintf("automatic downloads: %t · latest %d · concurrency %d · quota %d bytes · retain played %d days", settings.Auto, settings.Latest, settings.Concurrency, settings.MaxBytes, settings.RetainPlayedDays)}
+		} else if len(rest) <= 1 && (len(rest) == 0 || rest[0] == "on" || rest[0] == "off") {
+			if len(rest) == 1 {
+				settings.Auto = rest[0] == "on"
+			}
+			data, _ := json.Marshal(settings)
+			if err = ensureDaemon(); err == nil {
+				var out string
+				out, err = ask("podcast-download-settings " + string(data))
+				result, lines = out, []string{out}
+			}
+		} else {
+			return "", fmt.Errorf("usage: podcasts auto [on|off] [--latest N] [--concurrency N] [--quota 10GB] [--retain days]")
+		}
 	case "country":
 		if len(rest) == 0 {
 			l, e := fetchPodcastLibrary()
@@ -289,8 +491,8 @@ func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, e
 			return "", fmt.Errorf("usage: podcasts clear")
 		}
 		fallthrough
-	case "episodes", "subscribe", "unsubscribe", "play", "latest":
-		if len(rest) == 0 || len(rest) > 2 || len(rest) == 2 && action != "play" && action != "queue" {
+	case "episodes", "subscribe", "unsubscribe", "play", "latest", "download":
+		if len(rest) == 0 || len(rest) > 2 || len(rest) == 2 && action != "play" && action != "queue" && action != "download" {
 			return "", fmt.Errorf("usage: podcasts %s <feed-url>", action)
 		}
 		if !podcast.ValidURL(rest[0]) {
@@ -322,6 +524,9 @@ func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, e
 			result, lines = out, []string{"subscribed: " + feed.Show.Title}
 		default:
 			index := newestEpisode(feed.Episodes)
+			if index < 0 {
+				return "", fmt.Errorf("podcast feed has no playable episodes")
+			}
 			if len(rest) == 2 {
 				n, e := strconv.Atoi(rest[1])
 				if e != nil || n < 1 || n > len(feed.Episodes) {
@@ -330,7 +535,14 @@ func runPodcast(ctx context.Context, args []string, coloredHelp bool) (string, e
 				index = n - 1
 			}
 			var out string
-			out, err = clientEpisode(feed.Episodes[index], restart, action == "queue")
+			if action == "download" {
+				out, err = podcastMutation("podcast-download", feed.Episodes[index])
+			} else if foreground {
+				err = runForegroundMediaItems([]MediaItem{itemFromEpisode(feed.Episodes[index])})
+				out = "foreground playback ended"
+			} else {
+				out, err = clientEpisode(feed.Episodes[index], restart, action == "queue")
+			}
 			result, lines = out, []string{out}
 		}
 	default:

@@ -10,7 +10,7 @@ import (
 // that Go's default usage output cannot discover.
 func printCLIHelp() {
 	out := flag.CommandLine.Output()
-	fmt.Fprint(out, `chill - terminal radio and podcast player
+	fmt.Fprint(out, `chill - terminal audio, radio, and podcast player
 
 Usage:
   chill [options] [station]
@@ -19,7 +19,13 @@ Usage:
 With no arguments, chill opens the interactive REPL.
 `)
 	printHelpSection(out, "Commands", [][2]string{
-		{"play [station]", "resume playback or play a station"},
+		{"play [source...]", "resume or play stations, files, folders, playlists, and URLs"},
+		{"open", "browse local audio, queues, playlists, and listening history"},
+		{"queue [command]", "list, search, append, replace, reorder, remove, or undo"},
+		{"playlist [command]", "manage and import or export saved playlists"},
+		{"library [collection]", "list recent items, favorites, and bookmarks"},
+		{"shuffle [on|off]", "control source-neutral queue shuffle"},
+		{"repeat [off|all|one]", "control source-neutral queue repeat"},
 		{"pause / resume / toggle / stop", "control current playback"},
 		{"status [--json]", "show current playback"},
 		{"volume [level]", "report or change volume (0-100)"},
@@ -28,11 +34,11 @@ With no arguments, chill opens the interactive REPL.
 		{"podcasts [command|feed-url]", "browse podcasts; --help lists all commands"},
 		{"radio [command]", "discover and favorite stations; --help lists commands"},
 		{"history [--limit N|clear]", "show or clear recently heard radio tracks"},
-		{"lyrics [--json]", "show lyrics for the current live track"},
-		{"notifications [on|off]", "control live track-change notifications"},
-		{"seek <seconds>", "jump within a podcast (-30, +30)"},
-		{"speed [0.5-3]", "set podcast playback speed"},
-		{"next / prev", "next queued episode / previous episode"},
+		{"lyrics [--json]", "show lyrics for the current track"},
+		{"notifications [on|off]", "control track-change notifications"},
+		{"seek <seconds>", "jump within finite media (-30, +30)"},
+		{"speed [0.5-3]", "set finite-media playback speed"},
+		{"next / prev", "navigate the universal queue"},
 		{"doctor [options]", "check dependencies, config, and daemon compatibility"},
 		{"add <name> <url> [description]", "save a custom station or override a built-in"},
 		{"remove <name>", "remove a custom station or restore a built-in"},
@@ -57,6 +63,11 @@ With no arguments, chill opens the interactive REPL.
 		{"chill chillhop", "play a station"},
 		{"chill -i", "same as chill"},
 		{"chill podcasts", "open the podcast browser"},
+		{"chill ~/Music", "recursively queue a local music folder"},
+		{"chill album.m3u --fg", "play a playlist without the daemon"},
+		{"chill song.flac --eq Rock", "play a local track with an EQ preset"},
+		{"chill queue next song.flac", "put a local track next"},
+		{"chill playlist import mix.m3u8", "save an external playlist"},
 		{"chill podcasts search history --json", "search for shows as JSON"},
 		{"chill radio", "open the radio browser"},
 		{"chill radio --fg", "browse, then play the selection in the foreground"},

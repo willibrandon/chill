@@ -3,12 +3,22 @@
 package main
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+func sourceNeedsYtdl(source string) bool {
+	u, err := url.Parse(source)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "youtu.be" || host == "youtube.com" || strings.HasSuffix(host, ".youtube.com")
+}
 
 // requirementsError reports programs chill needs that couldn't be found.
 type requirementsError struct {
@@ -81,6 +91,53 @@ func checkPodcastRequirements() error {
 	for _, name := range []string{"mpv", "ffmpeg", "ffprobe"} {
 		if _, err := exec.LookPath(name); err != nil {
 			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return &requirementsError{missing}
+	}
+	return nil
+}
+
+// checkLocalMediaRequirements returns the programs needed while discovering
+// local tracks. Playback checks mpv separately when it starts.
+func checkLocalMediaRequirements() error {
+	var missing []string
+	for _, name := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return &requirementsError{missing}
+	}
+	return nil
+}
+
+// checkMediaRequirements checks only the tools required by these sources, so
+// local files and direct streams do not depend on a video-site extractor.
+func checkMediaRequirements(items []MediaItem) error {
+	missing, seen := []string{}, map[string]bool{}
+	need := func(name string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		if _, err := exec.LookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	need("mpv")
+	need("ffmpeg")
+	mpv, _ := exec.LookPath("mpv")
+	hasExtractor := findYtdl(mpv) != ""
+	for _, item := range items {
+		if item.Kind == MediaPodcast {
+			need("ffprobe")
+		}
+		if sourceNeedsYtdl(item.Source) && !hasExtractor && !seen["yt-dlp"] {
+			seen["yt-dlp"] = true
+			missing = append(missing, "yt-dlp")
 		}
 	}
 	if len(missing) > 0 {

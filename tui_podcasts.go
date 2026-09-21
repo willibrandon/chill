@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ type podcastPage struct {
 	shows                             []podcast.Show
 	feed                              podcast.Feed
 	selected                          int
+	inboxFilter                       string
 }
 
 type podcastBrowser struct {
@@ -96,6 +99,7 @@ func (t *tui) podcastResult(msg podcastResultMsg) tea.Cmd {
 		p.note = msg.err.Error()
 		return nil
 	}
+	wasSyncing := p.library != nil && p.library.Syncing
 	if msg.page != nil {
 		p.page = *msg.page
 	}
@@ -107,7 +111,31 @@ func (t *tui) podcastResult(msg podcastResultMsg) tea.Cmd {
 	}
 	p.page.selected = min(p.page.selected, max(0, len(p.rows())-1))
 	p.note = msg.note
+	if p.page.kind == "inbox" && p.library != nil && p.library.Syncing {
+		p.note = "Syncing subscriptions…"
+		return t.podcastLibraryPoll()
+	}
+	if p.page.kind == "inbox" && p.library != nil && p.library.SyncError != "" && p.note == "" {
+		p.note = p.library.SyncError
+	} else if p.page.kind == "inbox" && p.library != nil && wasSyncing && !p.library.Syncing && p.note == "" {
+		p.note = "Inbox refreshed"
+	}
+	if p.page.kind == "downloads" && p.library != nil {
+		for _, download := range p.library.Downloads {
+			if download.State == "queued" || download.State == "downloading" || download.State == "retrying" {
+				return t.podcastLibraryPoll()
+			}
+		}
+	}
 	return refreshStatus
+}
+
+func (t *tui) podcastLibraryPoll() tea.Cmd {
+	id := t.podcasts.id
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		library, err := fetchPodcastLibrary()
+		return podcastResultMsg{id: id, library: library, err: err}
+	})
 }
 
 func (t *tui) podcastNavigate(page podcastPage) {
@@ -151,11 +179,19 @@ func (p *podcastBrowser) rows() []int {
 	n := len(p.page.shows)
 	switch p.page.kind {
 	case "home":
-		n = 4
+		n = 7
 	case "categories":
 		n = len(podcast.Categories)
 	case "episodes":
 		n = len(p.page.feed.Episodes)
+	case "inbox":
+		n = len(p.inboxEpisodes())
+	case "downloads":
+		if p.library != nil {
+			n = len(p.library.Downloads)
+		}
+	case "download-settings":
+		n = 5
 	}
 	var rows []int
 	for i := range n {
@@ -187,7 +223,7 @@ func (p *podcastBrowser) subscribed(feed string) bool {
 func (p *podcastBrowser) rowText(i int) string {
 	switch p.page.kind {
 	case "home":
-		return []string{"Top Shows (" + strings.ToUpper(p.country()) + ")", "Browse Categories", "Subscriptions", "Search shows or open an RSS feed"}[i]
+		return []string{"Top Shows (" + strings.ToUpper(p.country()) + ")", "Browse Categories", "Subscriptions", "Inbox", "Downloads", "Download Settings", "Search shows or open an RSS feed"}[i]
 	case "categories":
 		return podcast.Categories[i].Name
 	case "episodes":
@@ -205,6 +241,38 @@ func (p *podcastBrowser) rowText(i int) string {
 			duration = clock(e.Duration)
 		}
 		return fmt.Sprintf("%s%s  %7s  %s", mark, date, duration, e.Title)
+	case "inbox":
+		episodes := p.inboxEpisodes()
+		e := episodes[i]
+		state := ""
+		if download, ok := p.library.Downloads[e.Key()]; ok {
+			state = " [" + download.State + "]"
+		}
+		return fmt.Sprintf("%s  %s — %s%s", e.Published.Format("2006-01-02"), e.Show, e.Title, state)
+	case "downloads":
+		downloads := p.downloadRows()
+		d := downloads[i]
+		pin := ""
+		if d.Pinned {
+			pin = " · pinned"
+		}
+		progress := ""
+		if d.Total > 0 && d.State == "downloading" {
+			progress = fmt.Sprintf(" %d%%", min(100, d.Bytes*100/d.Total))
+		}
+		return fmt.Sprintf("%-11s%s  %s — %s%s", d.State, progress, d.Episode.Show, d.Episode.Title, pin)
+	case "download-settings":
+		if p.library == nil {
+			return ""
+		}
+		settings := p.library.DownloadSettings
+		return []string{
+			fmt.Sprintf("Automatic downloads  %t", settings.Auto),
+			fmt.Sprintf("Newest per show     %d", settings.Latest),
+			fmt.Sprintf("Concurrent          %d", settings.Concurrency),
+			fmt.Sprintf("Disk quota          %.1f GiB", float64(settings.MaxBytes)/float64(1<<30)),
+			fmt.Sprintf("Keep played         %d days", settings.RetainPlayedDays),
+		}[i]
 	default:
 		s := p.page.shows[i]
 		mark := "  "
@@ -217,6 +285,32 @@ func (p *podcastBrowser) rowText(i int) string {
 		}
 		return text
 	}
+}
+
+func (p *podcastBrowser) inboxEpisodes() []podcast.Episode {
+	if p.library == nil {
+		return nil
+	}
+	var episodes []podcast.Episode
+	for _, episode := range p.library.Inbox {
+		played := p.library.Progress[episode.Key()].Played
+		if p.page.inboxFilter == "all" || p.page.inboxFilter == "played" && played || p.page.inboxFilter == "" && !played {
+			episodes = append(episodes, episode)
+		}
+	}
+	return episodes
+}
+
+func (p *podcastBrowser) downloadRows() []episodeDownload {
+	if p.library == nil {
+		return nil
+	}
+	downloads := make([]episodeDownload, 0, len(p.library.Downloads))
+	for _, download := range p.library.Downloads {
+		downloads = append(downloads, download)
+	}
+	slices.SortFunc(downloads, func(a, b episodeDownload) int { return b.Updated.Compare(a.Updated) })
+	return downloads
 }
 
 func (t *tui) podcastSelect(index int) tea.Cmd {
@@ -240,6 +334,33 @@ func (t *tui) podcastSelect(index int) tea.Cmd {
 				return podcastResultMsg{library: l, err: err}
 			})
 		case 3:
+			t.podcastNavigate(podcastPage{kind: "inbox", title: "Inbox"})
+			return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+				_, err := func() (string, error) {
+					if err := ensureDaemon(); err != nil {
+						return "", err
+					}
+					return ask("podcast-sync")
+				}()
+				l, libraryErr := fetchPodcastLibrary()
+				if err == nil {
+					err = libraryErr
+				}
+				return podcastResultMsg{library: l, err: err}
+			})
+		case 4:
+			t.podcastNavigate(podcastPage{kind: "downloads", title: "Downloads"})
+			return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+				l, err := fetchPodcastLibrary()
+				return podcastResultMsg{library: l, err: err}
+			})
+		case 5:
+			t.podcastNavigate(podcastPage{kind: "download-settings", title: "Download Settings"})
+			return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+				l, err := fetchPodcastLibrary()
+				return podcastResultMsg{library: l, err: err}
+			})
+		case 6:
 			p.editing, p.searching = true, true
 			p.input.SetValue("")
 			return p.input.Focus()
@@ -254,10 +375,50 @@ func (t *tui) podcastSelect(index int) tea.Cmd {
 	case "episodes":
 		e := p.page.feed.Episodes[index]
 		return t.podcastPlay(e, false, false)
+	case "inbox":
+		return t.podcastPlay(p.inboxEpisodes()[index], false, false)
+	case "downloads":
+		return t.podcastPlay(p.downloadRows()[index].Episode, false, false)
+	case "download-settings":
+		return t.podcastAdjustDownloadSetting(index, 1)
 	default:
 		return t.podcastSearch(p.page.shows[index].FeedURL)
 	}
 	return nil
+}
+
+func (t *tui) podcastAdjustDownloadSetting(index, delta int) tea.Cmd {
+	p := &t.podcasts
+	if p.library == nil {
+		return nil
+	}
+	settings := p.library.DownloadSettings
+	switch index {
+	case 0:
+		settings.Auto = !settings.Auto
+	case 1:
+		settings.Latest = max(1, min(20, settings.Latest+delta))
+	case 2:
+		settings.Concurrency = max(1, min(8, settings.Concurrency+delta))
+	case 3:
+		settings.MaxBytes = max(int64(100<<20), min(int64(1<<50), settings.MaxBytes+int64(delta)*(1<<30)))
+	case 4:
+		settings.RetainPlayedDays = max(0, min(3650, settings.RetainPlayedDays+delta*7))
+	default:
+		return nil
+	}
+	return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+		data, _ := json.Marshal(settings)
+		if err := ensureDaemon(); err != nil {
+			return podcastResultMsg{err: err}
+		}
+		out, err := ask("podcast-download-settings " + string(data))
+		library, libraryErr := fetchPodcastLibrary()
+		if err == nil {
+			err = libraryErr
+		}
+		return podcastResultMsg{library: library, note: out, err: err}
+	})
 }
 
 func (t *tui) podcastPlay(e podcast.Episode, restart, queue bool) tea.Cmd {
@@ -360,12 +521,45 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 		p.page.selected = 0
 	case "end":
 		p.page.selected = max(0, len(rows)-1)
+	case "left", "right":
+		if p.page.kind == "download-settings" && len(rows) > 0 {
+			delta := -1
+			if key == "right" {
+				delta = 1
+			}
+			return t.podcastAdjustDownloadSetting(rows[p.page.selected], delta)
+		}
 	case "/", "ctrl+f":
 		p.editing, p.searching = true, key == "ctrl+f" || p.page.kind == "home"
 		p.input.SetValue("")
 		return p.input.Focus()
 	case "ctrl+r":
+		if p.page.kind == "inbox" {
+			return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+				if err := ensureDaemon(); err != nil {
+					return podcastResultMsg{err: err}
+				}
+				_, err := ask("podcast-sync")
+				l, libraryErr := fetchPodcastLibrary()
+				if err == nil {
+					err = libraryErr
+				}
+				return podcastResultMsg{library: l, err: err, note: "Inbox refreshed"}
+			})
+		}
 		return t.podcastRefresh()
+	case "v":
+		if p.page.kind == "inbox" {
+			p.page.inboxFilter = map[string]string{"": "all", "all": "played", "played": ""}[p.page.inboxFilter]
+			p.page.selected = 0
+			if p.page.inboxFilter == "all" {
+				p.note = "Showing played and unplayed episodes"
+			} else if p.page.inboxFilter == "played" {
+				p.note = "Showing played episodes"
+			} else {
+				p.note = "Showing unplayed episodes"
+			}
+		}
 	case "shift+left", "shift+right", "space", "[", "]":
 		if key == "space" && (t.status == nil || t.status.Station == "" && t.status.Episode == nil) {
 			if p.page.kind == "episodes" && len(rows) > 0 {
@@ -388,7 +582,7 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		return t.start(action)
-	case "enter", "f", "q", "r", "l":
+	case "enter", "f", "q", "r", "l", "d", "D", "P", "R":
 		if p.loading || len(rows) == 0 {
 			return nil
 		}
@@ -396,12 +590,76 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 		if key == "enter" {
 			return t.podcastSelect(index)
 		}
+		if key == "l" && p.page.kind == "inbox" {
+			episodes := p.inboxEpisodes()
+			seen := map[string]bool{}
+			var items []MediaItem
+			for _, episode := range episodes {
+				if !seen[episode.FeedURL] {
+					seen[episode.FeedURL] = true
+					items = append(items, itemFromEpisode(episode))
+				}
+			}
+			if len(items) == 0 {
+				p.note = "Inbox has no matching episodes"
+				return nil
+			}
+			return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+				out, err := sendItems("queue-append", items)
+				return podcastResultMsg{note: out, err: err}
+			})
+		}
+		var selectedEpisode *podcast.Episode
+		switch p.page.kind {
+		case "episodes":
+			selectedEpisode = &p.page.feed.Episodes[index]
+		case "inbox":
+			episodes := p.inboxEpisodes()
+			selectedEpisode = &episodes[index]
+		case "downloads":
+			downloads := p.downloadRows()
+			selectedEpisode = &downloads[index].Episode
+		}
+		if selectedEpisode != nil {
+			episode := *selectedEpisode
+			switch key {
+			case "q", "r":
+				return t.podcastPlay(episode, key == "r", key == "q")
+			case "d":
+				return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+					out, err := podcastMutation("podcast-download", episode)
+					l, libraryErr := fetchPodcastLibrary()
+					if err == nil {
+						err = libraryErr
+					}
+					return podcastResultMsg{library: l, note: out, err: err}
+				})
+			case "D", "P", "R":
+				if p.page.kind != "downloads" {
+					return nil
+				}
+				action := "podcast-download-remove"
+				if key == "P" {
+					action = "podcast-download-pin"
+				} else if key == "R" {
+					action = "podcast-download-retry"
+				}
+				return t.podcastRequest(func(ctx context.Context) podcastResultMsg {
+					if err := ensureDaemon(); err != nil {
+						return podcastResultMsg{err: err}
+					}
+					out, err := ask(action + " " + episode.Key())
+					l, libraryErr := fetchPodcastLibrary()
+					if err == nil {
+						err = libraryErr
+					}
+					return podcastResultMsg{library: l, note: out, err: err}
+				})
+			}
+		}
 		var show podcast.Show
 		if p.page.kind == "episodes" {
 			show = p.page.feed.Show
-			if key == "q" || key == "r" {
-				return t.podcastPlay(p.page.feed.Episodes[index], key == "r", key == "q")
-			}
 		} else if len(p.page.shows) > index {
 			show = p.page.shows[index]
 		}
@@ -429,7 +687,11 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 				if err != nil {
 					return podcastResultMsg{err: err}
 				}
-				out, err := clientEpisode(feed.Episodes[newestEpisode(feed.Episodes)], false, true)
+				index := newestEpisode(feed.Episodes)
+				if index < 0 {
+					return podcastResultMsg{err: fmt.Errorf("podcast feed has no playable episodes")}
+				}
+				out, err := clientEpisode(feed.Episodes[index], false, true)
 				return podcastResultMsg{note: out, err: err}
 			})
 		}
@@ -476,8 +738,13 @@ func (t *tui) podcastView() tea.View {
 			}
 		}
 		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter open/play · f subscribe · / filter · Ctrl+F search/RSS · Ctrl+R refresh"))
-		lines[height-2] = fit(styleDim.Render("Shift+←/→ ±30s · Space pause · [ ] speed · q queue · l latest · r restart · Esc back · F3 prompt"))
+		if p.page.kind == "download-settings" {
+			lines[height-3] = fit(styleDim.Render("Enter/→ increase or toggle · ← decrease · automatic downloads apply on sync"))
+			lines[height-2] = fit(styleDim.Render("Esc back · F3 prompt"))
+		} else {
+			lines[height-3] = fit(styleDim.Render("Enter open/play · f subscribe · d download · D remove · R retry · P pin · / filter · Ctrl+R refresh/sync"))
+			lines[height-2] = fit(styleDim.Render("Shift+←/→ ±30s · Space pause · [ ] speed · q queue · l latest/all shows · v played · r restart · Esc back · F3 prompt"))
+		}
 		if p.editing {
 			p.input.SetWidth(max(1, width-3))
 			lines[height-2] = fit(p.input.View())

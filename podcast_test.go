@@ -141,7 +141,7 @@ func TestPodcastQueueFinishesInOrder(t *testing.T) {
 func TestPodcastControlsRejectInvalidInput(t *testing.T) {
 	withConfigDir(t)
 	d := &Daemon{}
-	wantReply(t, d.execute("seek", "30"), false, "podcast")
+	wantReply(t, d.execute("seek", "30"), false, "finite media")
 	for _, arg := range []string{"NaN", "Inf", "-2", "5", "oops"} {
 		wantReply(t, d.execute("speed", arg), false, "speed")
 	}

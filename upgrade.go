@@ -59,13 +59,21 @@ func daemonNeedsUpgrade(s Status, clientVersion string) (bool, error) {
 }
 
 type playbackSnapshot struct {
-	// Queue preserves pending podcast episodes during daemon upgrades.
-	Queue []podcast.Episode `json:"queue,omitempty"`
+	// Queue preserves regular pending media during daemon upgrades.
+	Queue []MediaItem `json:"queue,omitempty"`
+	// PlayNext preserves priority media during daemon upgrades.
+	PlayNext []MediaItem `json:"play_next,omitempty"`
+	// Item preserves the source-neutral current item.
+	Item *MediaItem `json:"item,omitempty"`
+	// Shuffle preserves randomized queue selection.
+	Shuffle bool `json:"shuffle"`
+	// Repeat preserves off, all, or one mode.
+	Repeat string `json:"repeat,omitempty"`
 	// Episode preserves podcast metadata during a daemon upgrade.
 	Episode *podcast.Episode `json:"episode,omitempty"`
-	// Position is the episode playhead in seconds.
+	// Position is the finite-media playhead in seconds.
 	Position float64 `json:"position,omitempty"`
-	// Speed preserves the podcast playback rate.
+	// Speed preserves the finite-media playback rate.
 	Speed float64 `json:"speed,omitempty"`
 	// Station preserves the complete radio definition, including overrides.
 	Station *Station `json:"station,omitempty"`
@@ -84,8 +92,15 @@ type playbackSnapshot struct {
 }
 
 func snapshotPlayback(s Status, now time.Time) (playbackSnapshot, error) {
-	snapshot := playbackSnapshot{Volume: s.Volume, EQPreset: s.EQPreset, EQBands: s.EQBands, Muted: s.Muted, Paused: s.Paused, SleepUntil: s.SleepUntil}
-	if s.Episode != nil && s.State != "ended" && s.State != "idle" {
+	snapshot := playbackSnapshot{Queue: cloneItems(s.Queue), PlayNext: cloneItems(s.PlayNext), Item: s.Item, Shuffle: s.Shuffle, Repeat: s.Repeat, Volume: s.Volume, EQPreset: s.EQPreset, EQBands: s.EQBands, Muted: s.Muted, Paused: s.Paused, SleepUntil: s.SleepUntil}
+	if snapshot.Item != nil {
+		if s.State == "ended" || s.State == "idle" {
+			snapshot.Item = nil
+		} else {
+			snapshot.Position, snapshot.Speed = s.Position, s.Speed
+		}
+	}
+	if snapshot.Item == nil && s.Episode != nil && s.State != "ended" && s.State != "idle" {
 		snapshot.Episode, snapshot.Position, snapshot.Speed = s.Episode, s.Position, s.Speed
 	}
 	if snapshot.SleepUntil.IsZero() && s.Sleep != "" {
@@ -95,7 +110,7 @@ func snapshotPlayback(s Status, now time.Time) (playbackSnapshot, error) {
 		}
 		snapshot.SleepUntil = now.Add(remaining)
 	}
-	if s.Station != "" && (s.Playing || s.Paused || s.State == "loading" || s.State == "reconnecting") {
+	if snapshot.Item == nil && s.Station != "" && (s.Playing || s.Paused || s.State == "loading" || s.State == "reconnecting") {
 		if s.URL != "" {
 			snapshot.Station = &Station{Name: s.Station, URL: s.URL, Desc: s.Desc}
 		} else {
@@ -130,22 +145,18 @@ func upgradeDaemon() error {
 	if err != nil {
 		return err
 	}
-	if s.Queued > 0 {
-		raw, err := unwrapReply(sendRawCommand("queue"))
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal([]byte(raw), &snapshot.Queue); err != nil {
-			return err
-		}
-	}
 	if snapshot.Station != nil {
-		if err := checkRequirements(); err != nil {
+		if err := checkMediaRequirements([]MediaItem{itemFromStation(*snapshot.Station)}); err != nil {
 			return err
 		}
 	}
 	if snapshot.Episode != nil {
 		if err := checkPodcastRequirements(); err != nil {
+			return err
+		}
+	}
+	if snapshot.Item != nil {
+		if err := checkMediaRequirements([]MediaItem{*snapshot.Item}); err != nil {
 			return err
 		}
 	}
@@ -186,8 +197,32 @@ func (d *Daemon) restore(arg string) string {
 	if err := json.Unmarshal([]byte(arg), &snapshot); err != nil {
 		return fail("bad playback snapshot: " + err.Error())
 	}
-	if snapshot.Station != nil && snapshot.Episode != nil || snapshot.Position < 0 || snapshot.Position > 365*24*3600 || math.IsNaN(snapshot.Position) {
+	selected := 0
+	if snapshot.Station != nil {
+		selected++
+	}
+	if snapshot.Episode != nil {
+		selected++
+	}
+	if snapshot.Item != nil {
+		selected++
+	}
+	if selected > 1 || snapshot.Position < 0 || snapshot.Position > 365*24*3600 || math.IsNaN(snapshot.Position) || math.IsInf(snapshot.Position, 0) || len(snapshot.Queue)+len(snapshot.PlayNext) > 5000 {
 		return fail("invalid playback snapshot")
+	}
+	for i := range snapshot.Queue {
+		item, err := snapshot.Queue[i].normalized()
+		if err != nil {
+			return fail("invalid playback snapshot: " + err.Error())
+		}
+		snapshot.Queue[i] = item
+	}
+	for i := range snapshot.PlayNext {
+		item, err := snapshot.PlayNext[i].normalized()
+		if err != nil {
+			return fail("invalid playback snapshot: " + err.Error())
+		}
+		snapshot.PlayNext[i] = item
 	}
 	d.cancelSleep()
 	d.kill()
@@ -202,11 +237,38 @@ func (d *Daemon) restore(arg string) string {
 		eq = normalizeEqualizerConfig(eq)
 		d.eqPreset, d.eqCustom = eq.Preset, eq.Custom
 	}
-	if snapshot.Station == nil && snapshot.Episode == nil || (!snapshot.SleepUntil.IsZero() && !snapshot.SleepUntil.After(time.Now())) {
+	if d.library == nil {
+		d.library = emptyLibrary()
+	}
+	d.library.Queue, d.library.PlayNext, d.library.Shuffle = cloneItems(snapshot.Queue), cloneItems(snapshot.PlayNext), snapshot.Shuffle
+	if snapshot.Repeat == "off" || snapshot.Repeat == "all" || snapshot.Repeat == "one" {
+		d.library.Repeat = snapshot.Repeat
+	}
+	_ = d.library.commit()
+	if snapshot.Station == nil && snapshot.Episode == nil && snapshot.Item == nil || (!snapshot.SleepUntil.IsZero() && !snapshot.SleepUntil.After(time.Now())) {
 		return ok("restored idle playback")
 	}
 	d.station, d.paused = snapshot.Station, snapshot.Paused
-	d.episodeQueue = snapshot.Queue
+	if snapshot.Item != nil {
+		item, err := snapshot.Item.normalized()
+		if err != nil {
+			return fail("invalid restored media: " + err.Error())
+		}
+		d.current, d.station, d.episode = &item, item.Station, item.Episode
+		d.episodeOffset = time.Duration(max(0, snapshot.Position) * float64(time.Second))
+		d.episodeDuration = time.Duration(item.Duration * float64(time.Second))
+		if snapshot.Speed >= 0.5 && snapshot.Speed <= 3 {
+			d.rate = snapshot.Speed
+			if item.Kind == MediaPodcast {
+				d.speed = snapshot.Speed
+			}
+		}
+		if d.episode != nil {
+			if err := d.startEpisodeCache(); err != nil {
+				return fail(err.Error())
+			}
+		}
+	}
 	if snapshot.Episode != nil {
 		if !podcast.ValidURL(snapshot.Episode.URL) || !podcast.ValidURL(snapshot.Episode.FeedURL) {
 			return fail("invalid restored episode")
@@ -215,14 +277,20 @@ func (d *Daemon) restore(arg string) string {
 			return fail(err.Error())
 		}
 		d.episode = snapshot.Episode
+		item := itemFromEpisode(*snapshot.Episode)
+		d.current = &item
 		d.episodeOffset = time.Duration(max(0, snapshot.Position) * float64(time.Second))
 		d.episodeDuration = time.Duration(snapshot.Episode.Duration * float64(time.Second))
 		if snapshot.Speed >= 0.5 && snapshot.Speed <= 3 {
-			d.speed = snapshot.Speed
+			d.speed, d.rate = snapshot.Speed, snapshot.Speed
 		}
 		if err := d.startEpisodeCache(); err != nil {
 			return fail(err.Error())
 		}
+	}
+	if snapshot.Station != nil {
+		item := itemFromStation(*snapshot.Station)
+		d.current = &item
 	}
 	if err := d.startPlayback(); err != nil {
 		d.state, d.lastError = "failed", err.Error()
@@ -236,7 +304,7 @@ func (d *Daemon) restore(arg string) string {
 			d.sleep(remaining.String())
 		}
 	}
-	if d.episode != nil {
+	if d.current != nil && d.current.finite() {
 		d.scheduleProgress()
 	}
 	return ok("restored playback")

@@ -24,7 +24,7 @@ type Pin struct {
 
 // Library is the user's durable radio collection.
 type Library struct {
-	// Favorites contains stations deduplicated by playback URL.
+	// Favorites contains legacy station favorites pending migration.
 	Favorites []Station `json:"favorites"`
 	// Pins contains shortcuts to places and tags.
 	Pins []Pin `json:"pins,omitempty"`
@@ -168,38 +168,12 @@ func (s *Store) mutate(fn func(*Library) error) (Library, error) {
 	return library, nil
 }
 
-// ToggleFavorite adds a station by URL or removes the existing entry.
-func (s *Store) ToggleFavorite(station Station) (Library, bool, error) {
-	station.Name, station.URL = strings.TrimSpace(station.Name), strings.TrimSpace(station.URL)
-	if station.Name == "" || !validHTTP(station.URL) {
-		return Library{}, false, fmt.Errorf("favorite needs a station name and HTTP(S) stream URL")
-	}
-	added := false
-	library, err := s.mutate(func(l *Library) error {
-		i := slices.IndexFunc(l.Favorites, func(item Station) bool { return item.URL == station.URL })
-		if i >= 0 {
-			l.Favorites = append(l.Favorites[:i], l.Favorites[i+1:]...)
-			return nil
-		}
-		l.Favorites = append(l.Favorites, station)
-		added = true
+// ClearFavorites removes migrated favorites while preserving radio preferences.
+func (s *Store) ClearFavorites() (Library, error) {
+	return s.mutate(func(l *Library) error {
+		l.Favorites = nil
 		return nil
 	})
-	return library, added, err
-}
-
-// RemoveFavorite removes a station URL without toggling it back on.
-func (s *Store) RemoveFavorite(rawURL string) (Library, bool, error) {
-	removed := false
-	library, err := s.mutate(func(l *Library) error {
-		i := slices.IndexFunc(l.Favorites, func(item Station) bool { return item.URL == rawURL })
-		if i >= 0 {
-			l.Favorites = append(l.Favorites[:i], l.Favorites[i+1:]...)
-			removed = true
-		}
-		return nil
-	})
-	return library, removed, err
 }
 
 // TogglePin adds or removes an exact browser shortcut.

@@ -83,7 +83,7 @@ func catalogFromStation(s Station) radio.Station {
 }
 
 func clientPlayRadio(station radio.Station) (string, error) {
-	if err := checkRequirements(); err != nil {
+	if err := checkMediaRequirements([]MediaItem{itemFromStation(stationFromCatalog(station))}); err != nil {
 		return "", err
 	}
 	if err := ensureDaemon(); err != nil {
@@ -284,19 +284,21 @@ func runRadioCommand(ctx context.Context, args []string, coloredHelp bool) (stri
 			}
 			return clientPlayRadio(station)
 		case "favorite":
-			library, added, e := store.ToggleFavorite(station)
+			desired := true
+			library, added, changed, e := updateRadioFavorite(store, station, &desired)
 			if e != nil {
 				return "", e
 			}
 			if jsonOutput {
 				return radioJSON(library.Favorites)
 			}
-			if !added {
-				return "removed favorite: " + name, nil
+			if added && changed {
+				return "favorite: " + name, nil
 			}
-			return "favorite: " + name, nil
+			return "already a favorite: " + name, nil
 		case "unfavorite":
-			library, removed, e := store.RemoveFavorite(station.URL)
+			desired := false
+			library, _, removed, e := updateRadioFavorite(store, station, &desired)
 			if e != nil {
 				return "", e
 			}
@@ -318,7 +320,7 @@ func runRadioCommand(ctx context.Context, args []string, coloredHelp bool) (stri
 		if len(rest) != 0 {
 			return "", fmt.Errorf("usage: chill radio favorites")
 		}
-		library, e := store.Load()
+		library, e := loadRadioViewLibrary(store)
 		if e != nil {
 			return "", e
 		}
@@ -398,7 +400,7 @@ func runRadioCommand(ctx context.Context, args []string, coloredHelp bool) (stri
 			}
 			return clientPlayRadio(station)
 		}
-		library, added, e := store.ToggleFavorite(station)
+		library, added, _, e := updateRadioFavorite(store, station, nil)
 		if e != nil {
 			return "", e
 		}
