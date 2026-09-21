@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/willibrandon/chill/internal/audio"
+	"github.com/willibrandon/chill/internal/streammeta"
 )
 
 type playerEvent struct {
-	loaded bool
-	ended  bool
-	err    string
+	loaded     bool
+	ended      bool
+	err        string
+	nowPlaying *streammeta.NowPlaying
 }
 
 // player keeps process management separate from daemon state, and lets tests

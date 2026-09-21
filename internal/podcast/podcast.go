@@ -36,6 +36,10 @@ type Episode struct {
 	Title string `json:"title"`
 	// Show is the display name of the parent podcast.
 	Show string `json:"show"`
+	// Author identifies the podcast publisher or host.
+	Author string `json:"author,omitempty"`
+	// Artwork is the parent podcast's image URL.
+	Artwork string `json:"artwork,omitempty"`
 	// URL points to the encoded audio enclosure.
 	URL string `json:"url"`
 	// Published is the publication date, or zero when unknown.

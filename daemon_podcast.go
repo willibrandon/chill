@@ -290,6 +290,9 @@ func (d *Daemon) seekEpisode(arg string) string {
 		return fail(err.Error())
 	}
 	d.scheduleProgress()
+	if d.media != nil {
+		d.media.Seeked(target)
+	}
 	return ok("seeking to " + clock(target.Seconds()))
 }
 

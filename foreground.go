@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,11 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/willibrandon/chill/internal/audio"
+	"github.com/willibrandon/chill/internal/lyrics"
+	"github.com/willibrandon/chill/internal/media"
+	"github.com/willibrandon/chill/internal/notify"
+	"github.com/willibrandon/chill/internal/streammeta"
+	"github.com/willibrandon/chill/internal/tracklog"
 )
 
 type foregroundPlayerMsg struct {
@@ -17,19 +23,39 @@ type foregroundPlayerMsg struct {
 	open       bool
 }
 
+type foregroundHistoryMsg struct{ err error }
+
+type foregroundMediaTickMsg struct{}
+
+type foregroundLyricsMsg struct {
+	raw    string
+	result lyrics.Result
+	err    error
+}
+
 type foregroundModel struct {
-	width, height int
-	station       *Station
-	player        *pcmPlayer
-	settings      playbackSettings
-	eq            equalizerConfig
-	eqCursor      int
-	generation    uint64
-	state         string
-	err           string
-	muted         bool
-	paused        bool
-	vibe          string
+	width, height  int
+	station        *Station
+	player         *pcmPlayer
+	settings       playbackSettings
+	eq             equalizerConfig
+	eqCursor       int
+	generation     uint64
+	state          string
+	err            string
+	muted          bool
+	paused         bool
+	vibe           string
+	nowPlaying     string
+	now            *streammeta.NowPlaying
+	lyricsOpen     bool
+	lyricsLoading  bool
+	lyricsLines    []string
+	lyricsOffset   int
+	lyricsHeading  string
+	media          *media.Service
+	stationHistory []Station
+	stationForward []Station
 }
 
 func startForegroundPCM(station *Station, settings playbackSettings, muted, paused bool, offset time.Duration) (*pcmPlayer, error) {
@@ -55,7 +81,91 @@ func waitForegroundPlayer(p *pcmPlayer, generation uint64) tea.Cmd {
 
 // Init waits for the foreground PCM pipeline to become audible.
 func (m *foregroundModel) Init() tea.Cmd {
-	return waitForegroundPlayer(m.player, m.generation)
+	return tea.Batch(waitForegroundPlayer(m.player, m.generation), foregroundMediaTick())
+}
+
+func foregroundMediaTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return foregroundMediaTickMsg{} })
+}
+
+func (m *foregroundModel) mediaState() media.State {
+	status := media.StatusStopped
+	if m.state == "playing" {
+		status = media.StatusPlaying
+	} else if m.paused || m.state == "paused" {
+		status = media.StatusPaused
+	}
+	title, artist := m.station.Desc, ""
+	if m.now != nil {
+		title, artist = m.now.Title, m.now.Artist
+		if title == "" {
+			title = m.now.Raw
+		}
+	}
+	volume := float64(m.settings.Volume) / 100
+	if m.muted {
+		volume = 0
+	}
+	return media.State{
+		Status: status, Volume: volume, Position: m.player.position(),
+		Track:     media.Track{Title: title, Artist: artist, Album: m.station.Name, Genre: m.station.Tags, URL: m.station.URL, ArtURL: m.station.Artwork},
+		CanGoNext: len(stationSnapshot()) > 1 || len(m.stationForward) > 0, CanGoPrevious: len(m.stationHistory) > 0,
+	}
+}
+
+func (m *foregroundModel) updateMedia() {
+	if m.media != nil {
+		m.media.Update(m.mediaState())
+	}
+}
+
+func (m *foregroundModel) switchStation(station Station, remember bool) tea.Cmd {
+	if remember && m.station != nil {
+		m.stationHistory = append(m.stationHistory, *m.station)
+		if len(m.stationHistory) > 100 {
+			m.stationHistory = m.stationHistory[len(m.stationHistory)-100:]
+		}
+		m.stationForward = nil
+	}
+	m.station = &station
+	m.now, m.nowPlaying = nil, ""
+	return m.restartAt(0)
+}
+
+func (m *foregroundModel) nextStation() tea.Cmd {
+	if len(m.stationForward) > 0 {
+		next := m.stationForward[len(m.stationForward)-1]
+		m.stationForward = m.stationForward[:len(m.stationForward)-1]
+		if m.station != nil {
+			m.stationHistory = append(m.stationHistory, *m.station)
+		}
+		return m.switchStation(next, false)
+	}
+	stations := stationSnapshot()
+	if len(stations) == 0 {
+		m.err = "no stations"
+		return nil
+	}
+	for attempts := 0; attempts < len(stations)*2; attempts++ {
+		next := stations[randInt(len(stations))]
+		if m.station == nil || next.URL != m.station.URL || len(stations) == 1 {
+			return m.switchStation(next, true)
+		}
+	}
+	return nil
+}
+
+func (m *foregroundModel) previousStation() tea.Cmd {
+	if len(m.stationHistory) == 0 {
+		m.err = "no previous station"
+		return nil
+	}
+	previous := m.stationHistory[len(m.stationHistory)-1]
+	m.stationHistory = m.stationHistory[:len(m.stationHistory)-1]
+	if m.station != nil {
+		m.stationForward = append(m.stationForward, *m.station)
+	}
+	return m.switchStation(previous, false)
 }
 
 func (m *foregroundModel) saveSettings() error {
@@ -109,6 +219,21 @@ func (m *foregroundModel) restartAt(offset time.Duration) tea.Cmd {
 	return waitForegroundPlayer(p, m.generation)
 }
 
+func (m *foregroundModel) loadLyrics() tea.Cmd {
+	if m.now == nil {
+		m.err = "no recognized live track"
+		return nil
+	}
+	now := *m.now
+	m.lyricsLoading, m.lyricsLines, m.lyricsOffset = true, nil, 0
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		result, err := lyrics.NewClient().Get(ctx, now.Artist, now.Title)
+		return foregroundLyricsMsg{raw: now.Raw, result: result, err: err}
+	}
+}
+
 // Update handles foreground playback and equalizer controls.
 func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
@@ -121,18 +246,132 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.event.err != "":
 			m.state, m.err = "failed", msg.event.err
+			m.updateMedia()
 			return m, nil
 		case msg.event.ended:
 			m.state = "ended"
+			m.updateMedia()
 			return m, nil
 		case msg.event.loaded:
 			m.state = "playing"
 			if m.paused {
 				m.state = "paused"
 			}
+		case msg.event.nowPlaying != nil:
+			if msg.event.nowPlaying.Raw == "" {
+				m.now, m.nowPlaying = nil, ""
+				m.updateMedia()
+				return m, waitForegroundPlayer(m.player, m.generation)
+			}
+			m.nowPlaying = msg.event.nowPlaying.Raw
+			now := *msg.event.nowPlaying
+			m.now = &now
+			station := *m.station
+			if m.settings.Notifications {
+				title, body := now.Title, now.Artist
+				if title == "" {
+					title = now.Raw
+				}
+				if body == "" {
+					body = station.Name
+				} else {
+					body += " · " + station.Name
+				}
+				go func() { _ = notify.Show(title, body, station.Artwork) }()
+			}
+			commands := []tea.Cmd{func() tea.Msg {
+				return foregroundHistoryMsg{tracklog.DefaultStore().Record(tracklog.Entry{
+					PlayedAt: time.Now().UTC(), Station: station.Name, StationURL: station.URL,
+					Artist: now.Artist, Title: now.Title, Raw: now.Raw, Artwork: station.Artwork,
+				})}
+			}, waitForegroundPlayer(m.player, m.generation)}
+			if m.lyricsOpen {
+				commands = append(commands, m.loadLyrics())
+			}
+			m.updateMedia()
+			return m, tea.Batch(commands...)
 		}
+		m.updateMedia()
 		return m, waitForegroundPlayer(m.player, m.generation)
+	case foregroundMediaTickMsg:
+		m.updateMedia()
+		return m, foregroundMediaTick()
+	case media.Command:
+		switch msg.Kind {
+		case media.Toggle:
+			if m.paused {
+				msg.Kind = media.Play
+			} else {
+				msg.Kind = media.Pause
+			}
+			fallthrough
+		case media.Play, media.Pause:
+			paused := msg.Kind == media.Pause
+			if paused != m.paused {
+				if err := m.player.command("set_property", "pause", paused); err != nil {
+					m.err = err.Error()
+				} else {
+					m.paused = paused
+					if paused {
+						m.state = "paused"
+					} else {
+						m.state = "playing"
+					}
+				}
+			}
+		case media.Stop:
+			return m, tea.Quit
+		case media.Next:
+			return m, m.nextStation()
+		case media.Previous:
+			return m, m.previousStation()
+		case media.SetVolume:
+			m.setVolume(int(msg.Volume*100 + 0.5))
+		}
+		m.updateMedia()
+		return m, nil
+	case foregroundHistoryMsg:
+		if msg.err != nil {
+			m.err = "saving track history: " + msg.err.Error()
+		}
+	case foregroundLyricsMsg:
+		if m.now == nil || msg.raw != m.now.Raw {
+			return m, nil
+		}
+		m.lyricsLoading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.err, m.lyricsLines = "", msg.result.Lines()
+		m.lyricsHeading = msg.result.Track
+		if msg.result.Artist != "" {
+			m.lyricsHeading = msg.result.Artist + " — " + msg.result.Track
+		}
+		if msg.result.Instrumental {
+			m.lyricsLines = []string{"Instrumental"}
+		}
 	case tea.KeyPressMsg:
+		if m.lyricsOpen {
+			room := max(1, m.height-6)
+			switch msg.String() {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "y", "esc":
+				m.lyricsOpen = false
+			case "up", "k":
+				m.lyricsOffset = max(0, m.lyricsOffset-1)
+			case "down", "j":
+				m.lyricsOffset = min(max(0, len(m.lyricsLines)-room), m.lyricsOffset+1)
+			case "pgup":
+				m.lyricsOffset = max(0, m.lyricsOffset-room)
+			case "pgdown", "space":
+				m.lyricsOffset = min(max(0, len(m.lyricsLines)-room), m.lyricsOffset+room)
+			case "r":
+				return m, m.loadLyrics()
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -152,6 +391,9 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.muted = !m.muted
 			}
+		case "y":
+			m.lyricsOpen = true
+			return m, m.loadLyrics()
 		case "9":
 			m.setVolume(m.settings.Volume - 5)
 		case "0":
@@ -205,6 +447,33 @@ func (m *foregroundModel) View() tea.View {
 	if m.width == 0 {
 		return view
 	}
+	if m.lyricsOpen {
+		lines := []string{
+			foregroundLine("chill · foreground lyrics", m.width, styleHeading),
+			foregroundLine(m.lyricsHeading, m.width, styleSelected),
+			"",
+		}
+		room := max(0, m.height-6)
+		for i := 0; i < room && m.lyricsOffset+i < len(m.lyricsLines); i++ {
+			lines = append(lines, foregroundLine("  "+m.lyricsLines[m.lyricsOffset+i], m.width, styleInput))
+		}
+		for len(lines) < max(3, m.height-3) {
+			lines = append(lines, "")
+		}
+		note := "live streams use manual scrolling"
+		if m.lyricsLoading {
+			note = "loading lyrics…"
+		}
+		if m.err != "" {
+			note = "error: " + m.err
+		}
+		lines = append(lines, foregroundLine(note, m.width, styleDim), foregroundLine("↑/↓ scroll · PgUp/PgDn page · r refresh · y/Esc back · q quit", m.width, styleDim))
+		if m.height > 0 {
+			lines = lines[:min(len(lines), m.height)]
+		}
+		view.SetContent(strings.Join(lines, "\n"))
+		return view
+	}
 	bands := m.eq.activeBands()
 	curve := make([]string, audio.EqualizerBandCount)
 	for i, label := range equalizerBandLabels {
@@ -226,10 +495,13 @@ func (m *foregroundModel) View() tea.View {
 		foregroundLine(fmt.Sprintf("%s · %s · vol %d%s", m.state, clock(m.player.position().Seconds()), m.settings.Volume, muted), m.width, styleInput),
 		foregroundLine("EQ ["+m.eq.Preset+"]  "+strings.Join(curve, "  ")+" dB", m.width, styleCommand),
 	}
+	if m.nowPlaying != "" {
+		lines = append(lines[:2], append([]string{foregroundLine("♫ "+m.nowPlaying, m.width, styleCommand)}, lines[2:]...)...)
+	}
 	if m.err != "" {
 		lines = append(lines, foregroundLine("error: "+m.err, m.width, styleError))
 	}
-	lines = append(lines, "", foregroundLine("q quit · Space pause · m mute · 9/0 volume · ←/→ seek", m.width, styleDim))
+	lines = append(lines, "", foregroundLine("q quit · Space pause · m mute · y lyrics · 9/0 volume · ←/→ seek", m.width, styleDim))
 	lines = append(lines, foregroundLine("h/l band · j/k gain · x zero · e/E preset · r flat · c custom", m.width, styleDim))
 	if m.height > 0 {
 		lines = lines[:min(len(lines), m.height)]
@@ -263,7 +535,20 @@ func runForeground(station *Station) error {
 		station: station, player: p, settings: settings, eq: settings.equalizer(),
 		state: "loading", vibe: vibes[randInt(len(vibes))],
 	}
-	_, runErr := tea.NewProgram(model).Run()
+	program := tea.NewProgram(model)
+	mediaService, mediaErr := media.New(func(command media.Command) { program.Send(command) })
+	if mediaErr != nil {
+		model.err = "media controls: " + mediaErr.Error()
+	} else {
+		model.media = mediaService
+	}
+	runErr := media.Run(mediaService, func() error {
+		_, err := program.Run()
+		return err
+	})
+	if mediaService != nil {
+		mediaService.Close()
+	}
 	model.close()
 	return runErr
 }

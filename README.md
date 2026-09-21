@@ -70,6 +70,12 @@ chill chillhop          # play specific station
 chill -i                # same as chill
 chill podcasts          # browse podcasts
 chill podcasts --help   # podcast CLI commands
+chill radio             # browse internet radio
+chill radio search jazz # search stations
+chill radio top --play 1 # play the first result
+chill history           # recently heard live tracks
+chill lyrics            # lyrics for the current live track
+chill notifications on  # opt in to track-change notifications
 chill seek -30          # jump back 30 seconds in an episode
 chill speed 1.5         # podcast playback speed
 chill --skip            # skip to random station
@@ -115,8 +121,8 @@ CLI/REPL ←── control IPC ──→ daemon ───── snapshots ──
 ```
 
 After an update, the next control command restarts an older daemon and restores
-your playback settings. Volume, the active EQ preset, and your Custom curve are
-saved between sessions.
+your playback settings. Volume, the active EQ preset, your Custom curve, and the
+notification preference are saved between sessions.
 
 The daemon decodes one stream into 48 kHz stereo PCM. Visualizers analyze the
 post-EQ samples sent to playback; they do not open another network stream or
@@ -202,6 +208,8 @@ Quitting also cancels diagnostics; music keeps playing.
 | `F2` | open/focus the visualizer; return to the prompt when focused |
 | `F3` | open podcasts or return to the prompt |
 | `F4` | open the equalizer or return to the prompt |
+| `F5` | open radio discovery or return to the prompt |
+| `F6` | show lyrics for the current live track or return to the prompt |
 | `Ctrl+Q` | quit, music keeps playing |
 
 ### Equalizer
@@ -224,6 +232,46 @@ hyphens, as in `Bass-Boost`.
 
 See [Equalizer architecture](docs/equalizer.md) for the signal path, state, and
 live-update design.
+
+### Radio discovery
+
+Press **F5** or run `chill radio` to browse top-voted, popular, trending, and
+random internet radio. Search by name, country, region, language, genre, or tag;
+favorite stations locally; pin useful country and tag views; and replay a
+station from Recently Heard. The browser supports filtering, paging, refresh,
+sort changes, and direct playback without adding a station to your config.
+
+`chill radio --help` lists the scriptable commands and options. Result lists
+support `--json`, `--play <number>`, `--favorite <number>`, and `--fg`.
+Nearby suggestions are opt-in and infer only from the system timezone or locale.
+
+See [Radio discovery](docs/radio.md) for every key, command, and saved-data rule.
+
+### Live tracks, history, and lyrics
+
+When a station publishes track metadata, Chill shows it in status, the REPL,
+foreground playback, and the operating system's now-playing surface. `chill
+history` keeps the latest 200 distinct track changes locally. Press **F6** or run
+`chill lyrics` to look up lyrics for the current track. Synced lyrics are shown
+as readable lines with manual scrolling because a live stream has no reliable
+song playhead.
+
+Track-change notifications are off by default. Enable them with `chill
+notifications on` and disable them with `chill notifications off`.
+
+See [Now playing](docs/now-playing.md) for metadata sources, lyrics caching,
+privacy, notifications, and history behavior.
+
+### System media controls
+
+Chill registers a native media session during daemon and foreground playback.
+Headset buttons, media keys, lock-screen controls, desktop media widgets, and
+supported volume or seek controls operate the same state as the CLI and REPL.
+Radio exposes next and previous station navigation; podcasts expose queue
+navigation and absolute seeking. Metadata, artwork, pause state, and podcast
+position stay synchronized.
+
+See [System media controls](docs/media-controls.md) for platform behavior.
 
 ### Podcasts
 
@@ -256,6 +304,7 @@ sessions.
 |-----|--------|
 | `q` | quit |
 | `m` | mute |
+| `y` | show or hide lyrics |
 | `9` / `0` | volume down / up |
 | `←` / `→` | seek |
 | `h` / `l` | select EQ band |
@@ -263,6 +312,9 @@ sessions.
 | `x` | zero the selected band |
 | `e` / `E` | next / previous preset |
 | `r` / `c` | Flat / saved Custom curve |
+
+Foreground playback also publishes native now-playing metadata and accepts
+system play, pause, stop, next, previous, and volume controls.
 
 ## Build and test
 

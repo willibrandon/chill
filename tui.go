@@ -29,7 +29,7 @@ const (
 	minPaletteLines = 8    // terminal height below which suggestions are hidden
 	maxTranscript   = 1000 // lines kept in the transcript
 
-	banner = "chill  type a station or command · F2 visualizer · F3 podcasts · F4 equalizer · F1 help"
+	banner = "chill  type a station or command · F2 visualizer · F3 podcasts · F4 equalizer · F5 radio · F6 lyrics · F1 help"
 )
 
 var (
@@ -104,6 +104,11 @@ type tui struct {
 	eq           replEqualizer
 	podcasts     podcastBrowser
 	podcastStart *string
+	radio        radioBrowser
+	radioStart   bool
+	radioFG      bool
+	radioChoice  *Station
+	lyrics       replLyrics
 }
 
 func newTUI() *tui {
@@ -143,6 +148,9 @@ func newTUI() *tui {
 
 // Init starts status polling and opens any requested podcast browser.
 func (t *tui) Init() tea.Cmd {
+	if t.radioStart {
+		return tea.Batch(pollStatus, t.openRadio())
+	}
 	if t.podcastStart != nil {
 		return tea.Batch(pollStatus, t.openPodcasts(*t.podcastStart))
 	}
@@ -178,6 +186,10 @@ func (t *tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (t *tui) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case lyricsResultMsg:
+		return t.lyricsResult(msg)
+	case radioResultMsg:
+		return t.radioResult(msg)
 	case podcastResultMsg:
 		return t.podcastResult(msg)
 	case visualizerConnectedMsg, visualizerFrameMsg, visualizerRetryMsg:
@@ -232,10 +244,14 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 				t.podcasts.note = ""
 			}
 		}
-		if !msg.poll {
-			return nil
+		var lyricUpdate tea.Cmd
+		if t.lyrics.open && !t.lyrics.loading && msg.status != nil && msg.status.NowPlaying != nil && msg.status.NowPlaying.Raw != t.lyrics.raw {
+			lyricUpdate = t.openLyrics()
 		}
-		return tea.Tick(time.Second, func(time.Time) tea.Msg { return pollStatus() })
+		if !msg.poll {
+			return lyricUpdate
+		}
+		return tea.Batch(lyricUpdate, tea.Tick(time.Second, func(time.Time) tea.Msg { return pollStatus() }))
 
 	case outputMsg:
 		if msg.id != t.commandID || t.task == nil {
@@ -292,6 +308,25 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return refreshStatus
 
 	case tea.MouseWheelMsg:
+		if t.lyrics.open {
+			if msg.Button == tea.MouseWheelUp {
+				t.lyrics.offset = max(0, t.lyrics.offset-3)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				t.lyrics.offset = min(max(0, len(t.lyrics.lines)-max(1, t.height-6)), t.lyrics.offset+3)
+			}
+			return nil
+		}
+		if t.radio.open {
+			r := &t.radio
+			if msg.Button == tea.MouseWheelUp {
+				r.page.selected = max(0, r.page.selected-3)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				r.page.selected = min(max(0, len(r.rows())-1), r.page.selected+3)
+			}
+			return nil
+		}
 		if t.podcasts.open {
 			p := &t.podcasts
 			if msg.Button == tea.MouseWheelUp {
@@ -317,12 +352,40 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		if t.help || t.viz.focused || t.eq.open || t.podcasts.open {
+		if t.help || t.viz.focused || t.eq.open || t.podcasts.open || t.radio.open || t.lyrics.open {
 			return nil
 		}
 		return t.mouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "f5":
+			if t.radio.open {
+				t.closeRadio()
+				return nil
+			}
+			t.closeLyrics()
+			t.closePodcasts()
+			t.closeEqualizer()
+			t.help = false
+			return t.openRadio()
+		case "f6":
+			if t.lyrics.open {
+				t.closeLyrics()
+				return nil
+			}
+			t.closeRadio()
+			t.closePodcasts()
+			t.closeEqualizer()
+			t.help = false
+			return t.openLyrics()
+		}
+		if t.lyrics.open {
+			return t.lyricsKey(msg)
+		}
+		if t.radio.open {
+			return t.radioKey(msg)
+		}
 		if t.podcasts.open {
 			return t.podcastKey(msg)
 		}
@@ -354,6 +417,10 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	open := t.paletteOpen()
 
 	switch msg.String() {
+	case "f6":
+		return t.openLyrics()
+	case "f5":
+		return t.openRadio()
 	case "f3":
 		return t.openPodcasts("")
 	case "f4":
@@ -513,6 +580,12 @@ func (t *tui) submit() tea.Cmd {
 			return t.openPodcasts(args[0])
 		}
 	}
+	if words[0] == "radio" && len(words) == 1 {
+		return t.openRadio()
+	}
+	if words[0] == "lyrics" && len(words) == 1 {
+		return t.openLyrics()
+	}
 	if words[0] == "viz" {
 		t.visualizerCommand(strings.Join(words[1:], " "))
 		return nil
@@ -585,6 +658,8 @@ func (t *tui) cancelCommand() bool {
 }
 
 func (t *tui) shutdown() {
+	t.closeLyrics()
+	t.closeRadio()
 	t.closePodcasts()
 	t.closeVisualizer()
 	if t.task != nil {
@@ -807,6 +882,12 @@ func (t *tui) fit() {
 
 // View renders the active REPL, help, podcast, or visualizer screen.
 func (t *tui) View() tea.View {
+	if t.lyrics.open {
+		return t.lyricsView()
+	}
+	if t.radio.open {
+		return t.radioView()
+	}
 	if t.podcasts.open {
 		return t.podcastView()
 	}
@@ -938,8 +1019,12 @@ func (t *tui) statusBar() string {
 		facts = append([]string{t.spinner.View() + " " + action + t.active + "..."}, facts...)
 	}
 
-	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
+	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F5 radio", "F6 lyrics", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
+	case t.lyrics.open:
+		hints = []string{"F6 prompt", "Ctrl+Q quit"}
+	case t.radio.open:
+		hints = []string{"F5 prompt", "Ctrl+Q quit"}
 	case t.podcasts.open:
 		hints = []string{"F3 prompt", "Ctrl+Q quit"}
 	case t.eq.open:
@@ -982,9 +1067,11 @@ func (t *tui) statusBar() string {
 // helpBody is what the help screen shows under its heading.
 func helpBody() string {
 	keys := [][2]string{
+		{"F2", "focus the visualizer (Esc returns to the prompt)"},
 		{"F3", "open podcasts or return to the prompt"},
 		{"F4", "open the ten-band equalizer or return to the prompt"},
-		{"F2", "focus the visualizer (Esc returns to the prompt)"},
+		{"F5", "open radio discovery or return to the prompt"},
+		{"F6", "show lyrics for the current live track"},
 		{"v / V", "next visualizer / fullscreen while visualizer is focused"},
 		{"Tab", "complete with the highlighted suggestion"},
 		{"→", "take the ghost text"},
@@ -1037,6 +1124,25 @@ func runRepl(podcastQuery ...string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	fmt.Println(dim + "~ stay chill ~" + reset)
+}
+
+func runReplRadio(foreground bool) {
+	model := newTUI()
+	model.radioStart, model.radioFG = true, foreground
+	_, err := tea.NewProgram(model).Run()
+	model.shutdown()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return
+	}
+	if model.radioChoice != nil {
+		recordRadioClick(catalogFromStation(*model.radioChoice))
+		if err := runForeground(model.radioChoice); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return
+		}
 	}
 	fmt.Println(dim + "~ stay chill ~" + reset)
 }
