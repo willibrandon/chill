@@ -250,6 +250,9 @@ func statusFacts(s *Status) []string {
 	}
 	if s.Station != "" {
 		facts = append(facts, s.Station)
+		if s.NowPlaying != nil && s.NowPlaying.Raw != "" {
+			facts = append(facts, s.NowPlaying.Raw)
+		}
 	}
 	if s.Uptime != "" {
 		facts = append(facts, s.Uptime)
@@ -401,6 +404,42 @@ func clientEqualizer(arg string) (string, error) {
 		}
 	}
 	return cyan + "♫ " + formatEqualizer(next) + reset, nil
+}
+
+func clientNotifications(arg string) (string, error) {
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	if arg != "" && arg != "on" && arg != "off" {
+		return "", fmt.Errorf("notifications must be on or off")
+	}
+	unlock, err := lockDaemon()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if isDaemonRunning() {
+		if err := upgradeDaemon(); err != nil {
+			return "", err
+		}
+		command := "notifications"
+		if arg != "" {
+			command += " " + arg
+		}
+		return unwrapReply(sendRawCommand(command))
+	}
+	settings, err := loadPlaybackSettings()
+	if err != nil {
+		return "", fmt.Errorf("reading playback state: %w", err)
+	}
+	if arg != "" {
+		settings.Notifications = arg == "on"
+		if err := savePlaybackSettings(settings); err != nil {
+			return "", fmt.Errorf("saving notifications: %w", err)
+		}
+	}
+	if settings.Notifications {
+		return "notifications: on", nil
+	}
+	return "notifications: off", nil
 }
 
 func clientSetEqualizerState(eq equalizerConfig) error {

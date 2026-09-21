@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/willibrandon/chill/internal/audio"
+	"github.com/willibrandon/chill/internal/streammeta"
 )
 
 // pcmPlayer owns one resolver, one decoder and one audio output. Only the
@@ -75,6 +76,15 @@ func (p *pcmPlayer) setEqualizer(bands audio.EqualizerBands) {
 }
 func (p *pcmPlayer) position() time.Duration {
 	return p.offset + time.Duration(p.output.positionNS.Load())
+}
+
+func (p *pcmPlayer) emitNowPlaying(raw string) {
+	now := streammeta.Parse(raw)
+	select {
+	case p.event <- playerEvent{nowPlaying: &now}:
+	case <-p.ctx.Done():
+	default:
+	}
 }
 
 // Raw-input mpv can announce file-loaded before the extractor or decoder has
@@ -201,8 +211,26 @@ func (p *pcmPlayer) decode(source string) error {
 	if err := p.ctx.Err(); err != nil {
 		return err
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
-	if strings.HasPrefix(resolved.URL, "https://") || strings.HasPrefix(resolved.URL, "http://") {
+	logLevel := "error"
+	if !p.finite {
+		logLevel = "info"
+	}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", logLevel}
+	remote := strings.HasPrefix(resolved.URL, "https://") || strings.HasPrefix(resolved.URL, "http://")
+	input := resolved.URL
+	var liveBody io.ReadCloser
+	if remote && !p.finite {
+		live, openErr := streammeta.Open(p.ctx, resolved.URL, resolved.Headers, p.emitNowPlaying)
+		if openErr == nil {
+			if live.Playlist {
+				live.Body.Close()
+			} else {
+				liveBody, input = live.Body, "pipe:0"
+				defer liveBody.Close()
+			}
+		}
+	}
+	if remote && liveBody == nil {
 		args = append(args, "-rw_timeout", "15000000")
 		var headers strings.Builder
 		for key, value := range resolved.Headers {
@@ -222,11 +250,14 @@ func (p *pcmPlayer) decode(source string) error {
 	if p.offset > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.6f", p.offset.Seconds()))
 	}
-	args = append(args, "-i", resolved.URL, "-map", "0:a:0", "-vn", "-sn", "-dn",
+	args = append(args, "-i", input, "-map", "0:a:0", "-vn", "-sn", "-dn",
 		"-ac", "2", "-ar", "48000", "-c:a", "pcm_f32le", "-f", "f32le", "pipe:1")
 	cmd := exec.Command("ffmpeg", args...)
 	var diagnostics tailBuffer
-	cmd.Stderr = &diagnostics
+	cmd.Stderr = newMetadataDiagnostics(&diagnostics, p.emitNowPlaying)
+	if liveBody != nil {
+		cmd.Stdin = liveBody
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

@@ -33,6 +33,10 @@ var replCommands = []replCommand{
 	{"eq", "[preset|--band N dB|list]", "show or edit the 10-band equalizer (F4)"},
 	{"viz", "[mode|off|list]", "show or select a REPL visualizer (F2 to focus)"},
 	{"podcasts", "[command|feed-url]", "browse podcasts (F3; --help for commands)"},
+	{"radio", "[command]", "discover and favorite stations (F5; --help for commands)"},
+	{"history", "[--limit N|clear]", "show recently heard radio tracks"},
+	{"lyrics", "", "show lyrics for the current live track (F6)"},
+	{"notifications", "[on|off]", "control live track-change notifications"},
 	{"seek", "<seconds>", "jump within an episode (-30, +30, 2m)"},
 	{"speed", "[0.5-3]", "set podcast playback speed"},
 	{"next", "", "play the next queued episode"},
@@ -96,6 +100,12 @@ func suggest(input string) []suggestion {
 			{text: "down", desc: "a notch quieter"},
 		}
 
+	case strings.EqualFold(words[0], "notifications") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		candidates = []suggestion{{text: "on", desc: "show live track changes"}, {text: "off", desc: "hide track changes"}}
+
 	case strings.EqualFold(words[0], "eq"):
 		arg := strings.TrimSpace(input[len(words[0]):])
 		bandFields := strings.Fields(arg)
@@ -142,6 +152,27 @@ func suggest(input string) []suggestion {
 		}
 		for _, name := range []string{"top", "search", "categories", "category", "episodes", "subscribe", "unsubscribe", "subscriptions", "country", "play", "latest", "queue", "clear", "--help"} {
 			candidates = append(candidates, suggestion{text: name, desc: "podcast command", takes: name == "search" || name == "play" || name == "episodes" || name == "subscribe" || name == "unsubscribe" || name == "category"})
+		}
+
+	case strings.EqualFold(words[0], "radio") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, item := range []suggestion{
+			{text: "top", desc: "most-voted stations"},
+			{text: "popular", desc: "most-listened stations"},
+			{text: "trending", desc: "stations gaining listeners"},
+			{text: "random", desc: "random stations"},
+			{text: "search", desc: "search station names", takes: true},
+			{text: "country", desc: "browse a country", takes: true},
+			{text: "tag", desc: "browse a genre or tag", takes: true},
+			{text: "countries", desc: "list countries"},
+			{text: "tags", desc: "list genres and tags"},
+			{text: "favorites", desc: "favorite stations"},
+			{text: "nearby", desc: "local country suggestions", takes: true},
+			{text: "--help", desc: "radio command help"},
+		} {
+			candidates = append(candidates, item)
 		}
 
 	case strings.EqualFold(words[0], "doctor"):
@@ -264,6 +295,12 @@ func execute(input string) (string, error) {
 	var err error
 
 	switch cmd {
+	case "lyrics":
+		return runLyricsCommand(context.Background(), parts[1:], true)
+	case "history":
+		return runHistoryCommand(parts[1:], true)
+	case "radio":
+		return runRadioCommand(context.Background(), parts[1:], true)
 	case "podcasts", "podcast":
 		return runPodcast(context.Background(), parts[1:], true)
 	case "seek":
@@ -302,6 +339,9 @@ func execute(input string) (string, error) {
 
 	case "eq":
 		out, err = clientEqualizer(arg)
+
+	case "notifications":
+		out, err = clientNotifications(arg)
 
 	case "doctor":
 		var report strings.Builder

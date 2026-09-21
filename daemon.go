@@ -18,7 +18,11 @@ import (
 
 	"github.com/willibrandon/chill/internal/audio"
 	"github.com/willibrandon/chill/internal/episode"
+	"github.com/willibrandon/chill/internal/media"
+	"github.com/willibrandon/chill/internal/notify"
 	"github.com/willibrandon/chill/internal/podcast"
+	"github.com/willibrandon/chill/internal/streammeta"
+	"github.com/willibrandon/chill/internal/tracklog"
 )
 
 // defaultVolume is used until a volume has been saved.
@@ -26,7 +30,7 @@ const defaultVolume = 70
 
 const maxRetryDelay = 30 * time.Second
 
-const daemonProtocol = 4
+const daemonProtocol = 5
 
 // Daemon manages the mpv subprocess and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
@@ -43,8 +47,14 @@ type Daemon struct {
 	podcasts                       *podcastLibrary
 	progressTimer                  *time.Timer
 	storageError                   string
+	trackStore                     *tracklog.Store
+	nowPlaying                     *streammeta.NowPlaying
+	media                          *media.Service
 	episodeQueue                   []podcast.Episode
 	episodeHistory                 []podcast.Episode
+	stationHistory                 []Station
+	stationForward                 []Station
+	notifications                  bool
 	speed                          float64
 	paused                         bool // whether playback is paused
 	muted                          bool
@@ -67,6 +77,8 @@ type Daemon struct {
 
 // Status represents the current playback state, serialized as JSON for clients.
 type Status struct {
+	// NowPlaying is the current live-radio title metadata.
+	NowPlaying *streammeta.NowPlaying `json:"now_playing,omitempty"`
 	// Episode describes the selected podcast episode, if any.
 	Episode *podcast.Episode `json:"episode,omitempty"`
 	// Position is the episode playhead in seconds, excluding pauses.
@@ -190,6 +202,7 @@ func (d *Daemon) handle(conn net.Conn) {
 func (d *Daemon) execute(action, arg string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.updateMedia()
 
 	switch action {
 	case "podcasts", "podcast-country", "podcast-subscribe", "podcast-unsubscribe":
@@ -202,6 +215,8 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.episodeSpeed(arg)
 	case "podcast-queue", "queue", "queue-clear", "next", "prev":
 		return d.podcastQueueCommand(action, arg)
+	case "radio-play":
+		return d.playRadio(arg)
 	case "play":
 		return d.play(arg)
 	case "pause":
@@ -237,6 +252,8 @@ func (d *Daemon) execute(action, arg string) string {
 		return d.equalizerCmd(arg)
 	case "eq-state":
 		return d.equalizerStateCmd(arg)
+	case "notifications":
+		return d.notificationsCmd(arg)
 	case "reload":
 		return d.reload()
 	case "sleep":
@@ -258,7 +275,36 @@ func (d *Daemon) play(name string) string {
 		return fail("unknown station: " + name)
 	}
 
+	return d.playStation(station)
+}
+
+func (d *Daemon) playRadio(arg string) string {
+	var station Station
+	if err := json.Unmarshal([]byte(arg), &station); err != nil {
+		return fail("invalid radio station")
+	}
+	station.Name = strings.TrimSpace(station.Name)
+	station.URL = strings.TrimSpace(station.URL)
+	if station.Name == "" || !podcast.ValidURL(station.URL) {
+		return fail("radio station needs a name and HTTP(S) stream URL")
+	}
+	station.Desc = strings.TrimSpace(station.Desc)
+	if station.Desc == "" {
+		station.Desc = station.Name
+	}
+	return d.playStation(&station)
+}
+
+func (d *Daemon) playStation(station *Station) string {
+	history := d.stationHistory
+	if d.station != nil && d.station.URL != station.URL {
+		history = append(history, *d.station)
+		if len(history) > 100 {
+			history = history[len(history)-100:]
+		}
+	}
 	d.kill()
+	d.stationHistory, d.stationForward = history, nil
 	d.station = station
 	if err := d.startPlayback(); err != nil {
 		d.state, d.lastError = "failed", err.Error()
@@ -336,6 +382,15 @@ func (d *Daemon) startPlayback() error {
 }
 
 func (d *Daemon) playerEvent(e playerEvent) {
+	defer d.updateMedia()
+	if e.nowPlaying != nil && d.station != nil {
+		if e.nowPlaying.Raw == "" {
+			d.nowPlaying = nil
+			return
+		}
+		d.updateNowPlaying(*e.nowPlaying)
+		return
+	}
 	if e.ended {
 		if d.episode != nil {
 			d.finishEpisode()
@@ -358,6 +413,39 @@ func (d *Daemon) playerEvent(e playerEvent) {
 			d.state = "paused"
 		}
 		d.startedAt = time.Now()
+	}
+}
+
+func (d *Daemon) updateNowPlaying(now streammeta.NowPlaying) {
+	if now.Raw == "" || d.nowPlaying != nil && d.nowPlaying.Raw == now.Raw {
+		return
+	}
+	now.ChangedAt = time.Now().UTC()
+	now.Artwork = d.station.Artwork
+	d.nowPlaying = &now
+	if d.trackStore == nil {
+		d.trackStore = tracklog.DefaultStore()
+	}
+	err := d.trackStore.Record(tracklog.Entry{
+		PlayedAt: now.ChangedAt, Station: d.station.Name, StationURL: d.station.URL,
+		Artist: now.Artist, Title: now.Title, Raw: now.Raw, Artwork: now.Artwork,
+	})
+	if err != nil {
+		d.storageError = "could not save track history: " + err.Error()
+	} else if strings.HasPrefix(d.storageError, "could not save track history:") {
+		d.storageError = ""
+	}
+	if d.notifications {
+		title, body, artwork := now.Title, now.Artist, now.Artwork
+		if title == "" {
+			title = now.Raw
+		}
+		if body == "" {
+			body = d.station.Name
+		} else {
+			body += " · " + d.station.Name
+		}
+		go func() { _ = notify.Show(title, body, artwork) }()
 	}
 }
 
@@ -543,14 +631,43 @@ func (d *Daemon) equalizer() equalizerConfig {
 }
 
 func (d *Daemon) playbackSettings() playbackSettings {
-	settings := playbackSettings{Volume: d.volume}
+	settings := playbackSettings{Volume: d.volume, Notifications: d.notifications}
 	settings.setEqualizer(d.equalizer())
 	return settings
 }
 
+func (d *Daemon) notificationsCmd(arg string) string {
+	value := strings.ToLower(strings.TrimSpace(arg))
+	if value == "" {
+		if d.notifications {
+			return ok("notifications: on")
+		}
+		return ok("notifications: off")
+	}
+	var enabled bool
+	switch value {
+	case "on", "true", "1":
+		enabled = true
+	case "off", "false", "0":
+		enabled = false
+	default:
+		return fail("notifications must be on or off")
+	}
+	previous := d.notifications
+	d.notifications = enabled
+	if err := savePlaybackSettings(d.playbackSettings()); err != nil {
+		d.notifications = previous
+		return fail("notifications unchanged: " + err.Error())
+	}
+	if enabled {
+		return ok("notifications: on")
+	}
+	return ok("notifications: off")
+}
+
 func (d *Daemon) setEqualizer(next equalizerConfig) string {
 	next = normalizeEqualizerConfig(next)
-	settings := playbackSettings{Volume: d.volume}
+	settings := d.playbackSettings()
 	settings.setEqualizer(next)
 	if err := savePlaybackSettings(settings); err != nil {
 		return fail("EQ unchanged because it could not be saved: " + err.Error())
@@ -662,8 +779,10 @@ func (d *Daemon) kill() {
 	}
 	d.episode = nil
 	d.episodeQueue, d.episodeHistory = nil, nil
+	d.stationHistory, d.stationForward = nil, nil
 	d.episodeOffset, d.episodeDuration = 0, 0
 	d.station = nil
+	d.nowPlaying = nil
 	d.paused = false
 	d.state, d.lastError = "idle", ""
 	d.startedAt = time.Time{}
@@ -671,9 +790,139 @@ func (d *Daemon) kill() {
 	d.retryAt = time.Time{}
 }
 
+func (d *Daemon) mediaState() media.State {
+	status := media.StatusStopped
+	if d.state == "playing" {
+		status = media.StatusPlaying
+	} else if d.paused || d.state == "paused" {
+		status = media.StatusPaused
+	}
+	state := media.State{Status: status, Volume: float64(d.volume) / 100}
+	if d.muted {
+		state.Volume = 0
+	}
+	if d.episode != nil {
+		state.Track = media.Track{
+			Title: d.episode.Title, Artist: d.episode.Author, Album: d.episode.Show,
+			URL: d.episode.URL, ArtURL: d.episode.Artwork, Duration: d.episodeDuration,
+		}
+		state.Position, state.Seekable = d.episodePosition(), true
+		state.CanGoNext = len(d.episodeQueue) > 0
+		state.CanGoPrevious = true
+	} else if d.station != nil {
+		state.Track = media.Track{Title: d.station.Desc, Album: d.station.Name, Genre: d.station.Tags, URL: d.station.URL, ArtURL: d.station.Artwork}
+		if d.nowPlaying != nil {
+			state.Track.Title, state.Track.Artist = d.nowPlaying.Title, d.nowPlaying.Artist
+			if state.Track.Title == "" {
+				state.Track.Title = d.nowPlaying.Raw
+			}
+		}
+		state.CanGoNext = len(stationSnapshot()) > 1 || len(d.stationForward) > 0
+		state.CanGoPrevious = len(d.stationHistory) > 0
+	}
+	return state
+}
+
+func (d *Daemon) updateMedia() {
+	if d.media != nil {
+		d.media.Update(d.mediaState())
+	}
+}
+
+func (d *Daemon) mediaCommand(command media.Command) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	defer d.updateMedia()
+	switch command.Kind {
+	case media.Toggle:
+		if d.paused {
+			d.resume()
+		} else if d.station == nil && d.episode == nil {
+			d.play("")
+		} else {
+			d.pause()
+		}
+	case media.Play:
+		if d.station == nil && d.episode == nil {
+			d.play("")
+		} else {
+			d.resume()
+		}
+	case media.Pause:
+		d.pause()
+	case media.Stop:
+		d.cancelSleep()
+		d.kill()
+	case media.Next:
+		if d.episode != nil {
+			d.podcastQueueCommand("next", "")
+		} else {
+			d.nextStation()
+		}
+	case media.Previous:
+		if d.episode != nil {
+			d.podcastQueueCommand("prev", "")
+		} else {
+			d.previousStation()
+		}
+	case media.Seek:
+		if d.episode != nil {
+			d.seekEpisode(command.Position.String())
+		}
+	case media.SetPosition:
+		if d.episode != nil {
+			delta := command.Position - d.episodePosition()
+			d.seekEpisode(delta.String())
+		}
+	case media.SetVolume:
+		d.setVolume(int(math.Round(command.Volume * 100)))
+	}
+}
+
+func (d *Daemon) nextStation() string {
+	if len(d.stationForward) == 0 {
+		return d.skip()
+	}
+	target := d.stationForward[len(d.stationForward)-1]
+	forward := d.stationForward[:len(d.stationForward)-1]
+	history := d.stationHistory
+	if d.station != nil {
+		history = append(history, *d.station)
+	}
+	d.kill()
+	d.stationHistory, d.stationForward = history, forward
+	d.station = &target
+	if err := d.startPlayback(); err != nil {
+		d.state, d.lastError = "failed", err.Error()
+		return fail(err.Error())
+	}
+	return ok("loading: " + target.Desc)
+}
+
+func (d *Daemon) previousStation() string {
+	if len(d.stationHistory) == 0 {
+		return fail("no previous station")
+	}
+	target := d.stationHistory[len(d.stationHistory)-1]
+	history := d.stationHistory[:len(d.stationHistory)-1]
+	forward := d.stationForward
+	if d.station != nil {
+		forward = append(forward, *d.station)
+	}
+	d.kill()
+	d.stationHistory, d.stationForward = history, forward
+	d.station = &target
+	if err := d.startPlayback(); err != nil {
+		d.state, d.lastError = "failed", err.Error()
+		return fail(err.Error())
+	}
+	return ok("loading: " + target.Desc)
+}
+
 func (d *Daemon) status() string {
 	s := Status{
 		Episode:      d.episode,
+		NowPlaying:   d.nowPlaying,
 		StorageError: d.storageError,
 		Version:      buildVersion(),
 		Protocol:     daemonProtocol,
@@ -732,7 +981,14 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "playback state: %v\n", err)
 		settings = defaultPlaybackSettings()
 	}
-	d := &Daemon{volume: settings.Volume, eqPreset: settings.EQPreset, eqCustom: settings.EQBands, state: "idle"}
+	d := &Daemon{volume: settings.Volume, eqPreset: settings.EQPreset, eqCustom: settings.EQBands, notifications: settings.Notifications, state: "idle"}
+	mediaService, mediaErr := media.New(func(command media.Command) { go d.mediaCommand(command) })
+	if mediaErr != nil {
+		fmt.Fprintf(os.Stderr, "media controls: %v\n", mediaErr)
+	} else {
+		d.media = mediaService
+		defer mediaService.Close()
+	}
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start daemon: %v\n", err)
 		os.Exit(1)
@@ -741,8 +997,18 @@ func runDaemon() {
 	fmt.Println(dim + "chill daemon started" + reset)
 	fmt.Println(dim + "socket: " + socketPath() + reset)
 
-	// keep running
-	select {}
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			d.mu.Lock()
+			d.updateMedia()
+			d.mu.Unlock()
+		}
+	}()
+	if err := media.Run(mediaService, func() error { select {} }); err != nil {
+		fmt.Fprintf(os.Stderr, "media controls: %v\n", err)
+	}
 }
 
 // isDaemonRunning checks if a daemon is already running by attempting

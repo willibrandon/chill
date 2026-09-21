@@ -66,21 +66,39 @@ var vibes = []string{
 
 // Station represents a radio stream with a name, URL, and description.
 type Station struct {
-	Name string `json:"name"` // short identifier (e.g., "lofi-girl")
+	Name string `json:"name"` // short identifier or directory display name
 	URL  string `json:"url"`  // video or direct stream URL
 	Desc string `json:"desc"` // human-readable description
+	// CatalogID is the public directory's stable identifier.
+	CatalogID string `json:"catalog_id,omitempty"`
+	// Country is the station's display country.
+	Country string `json:"country,omitempty"`
+	// CountryCode is the station's ISO country code.
+	CountryCode string `json:"country_code,omitempty"`
+	// Region is the station's optional state or region.
+	Region string `json:"region,omitempty"`
+	// Tags contains directory genres and descriptors.
+	Tags string `json:"tags,omitempty"`
+	// Codec is the advertised stream codec.
+	Codec string `json:"codec,omitempty"`
+	// Bitrate is the advertised stream rate in kilobits per second.
+	Bitrate int `json:"bitrate,omitempty"`
+	// Homepage is the station's website.
+	Homepage string `json:"homepage,omitempty"`
+	// Artwork is the station's image URL.
+	Artwork string `json:"artwork,omitempty"`
 }
 
 // builtinStations is the immutable starting point for every config reload.
 var builtinStations = []Station{
 	// These channels run multiple broadcasts: /live can select the wrong mix.
 	// Keep the intended stream IDs and audit with chill doctor --stations.
-	{"lofi-girl", "https://www.youtube.com/watch?v=rFZHOHl-L8A", "Lofi Girl - beats to relax/study to"},
-	{"chillhop", "https://www.youtube.com/watch?v=5yx6BWlEVcY", "Chillhop Radio - jazzy & lofi hip hop"},
-	{"chillout", "https://www.youtube.com/watch?v=9UMxZofMNbA", "Chillout Lounge - calm & relaxing"},
-	{"code-radio", "https://www.youtube.com/watch?v=ByZGu229-yA", "Code Radio - beats to study & code to"},
-	{"sleep", "https://www.youtube.com/watch?v=rPjez8z61rI", "Lofi - beats to sleep/relax to"},
-	{"study", "https://www.youtube.com/watch?v=7NOSDKb0HlU", "Lofi - beats to study/relax to"},
+	{Name: "lofi-girl", URL: "https://www.youtube.com/watch?v=rFZHOHl-L8A", Desc: "Lofi Girl - beats to relax/study to"},
+	{Name: "chillhop", URL: "https://www.youtube.com/watch?v=5yx6BWlEVcY", Desc: "Chillhop Radio - jazzy & lofi hip hop"},
+	{Name: "chillout", URL: "https://www.youtube.com/watch?v=9UMxZofMNbA", Desc: "Chillout Lounge - calm & relaxing"},
+	{Name: "code-radio", URL: "https://www.youtube.com/watch?v=ByZGu229-yA", Desc: "Code Radio - beats to study & code to"},
+	{Name: "sleep", URL: "https://www.youtube.com/watch?v=rPjez8z61rI", Desc: "Lofi - beats to sleep/relax to"},
+	{Name: "study", URL: "https://www.youtube.com/watch?v=7NOSDKb0HlU", Desc: "Lofi - beats to study/relax to"},
 }
 
 // configErr is why the stations file did not load, reported on the way out.
@@ -100,7 +118,7 @@ func main() {
 	repl := flag.Bool("i", false, "interactive mode (repl)")
 	list := flag.Bool("list", false, "list stations")
 	status := flag.Bool("status", false, "show current status")
-	jsonOutput := flag.Bool("json", false, "machine-readable status (with --status; read-only)")
+	jsonOutput := flag.Bool("json", false, "machine-readable output for supported commands")
 	toggle := flag.Bool("toggle", false, "pause/resume, or play the default station when stopped")
 	skip := flag.Bool("skip", false, "skip to random station")
 	stop := flag.Bool("stop", false, "stop playback")
@@ -131,8 +149,8 @@ func main() {
 		}
 		return true
 	}
-	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast") {
-		printResult("", fmt.Errorf("--json is supported by status and podcast commands"))
+	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics") {
+		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, and lyrics commands"))
 		return
 	}
 	if flag.NArg() > 0 {
@@ -167,6 +185,13 @@ func main() {
 		case "eq":
 			printResult(clientEqualizer(strings.Join(args[1:], " ")))
 			return
+		case "notifications":
+			if len(args) > 2 {
+				printResult("", fmt.Errorf("usage: chill notifications [on|off]"))
+				return
+			}
+			printResult(clientNotifications(strings.Join(args[1:], " ")))
+			return
 		case "status":
 			if len(args) == 2 && args[1] == "--json" || len(args) == 1 && *jsonOutput {
 				printStatusJSON()
@@ -197,6 +222,44 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 		printResult(runPodcastCommand(ctx, args))
+		return
+	}
+	if flag.NArg() > 0 && flag.Arg(0) == "radio" {
+		if !applyStartupEqualizer() {
+			return
+		}
+		args := flag.Args()[1:]
+		if (len(args) == 0 || len(args) == 1 && args[0] == "--fg") && !*jsonOutput {
+			runReplRadio(*fg || len(args) == 1)
+			return
+		}
+		if *jsonOutput {
+			args = append(args, "--json")
+		}
+		if *fg {
+			args = append(args, "--fg")
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		printResult(runRadioCommand(ctx, args, false))
+		return
+	}
+	if flag.NArg() > 0 && flag.Arg(0) == "history" {
+		args := flag.Args()[1:]
+		if *jsonOutput {
+			args = append(args, "--json")
+		}
+		printResult(runHistoryCommand(args, false))
+		return
+	}
+	if flag.NArg() > 0 && flag.Arg(0) == "lyrics" {
+		args := flag.Args()[1:]
+		if *jsonOutput {
+			args = append(args, "--json")
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		printResult(runLyricsCommand(ctx, args, false))
 		return
 	}
 	if flag.NArg() > 0 && (flag.Arg(0) == "seek" || flag.Arg(0) == "speed" || flag.Arg(0) == "next" || flag.Arg(0) == "prev") {

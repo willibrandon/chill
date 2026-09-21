@@ -233,6 +233,8 @@ type playbackSettings struct {
 	EQPreset string `json:"eq_preset,omitempty"`
 	// EQBands is the saved Custom curve, retained while a built-in is active.
 	EQBands audio.EqualizerBands `json:"eq_bands"`
+	// Notifications enables desktop alerts when live track metadata changes.
+	Notifications bool `json:"notifications,omitempty"`
 }
 
 func volumePath() string {

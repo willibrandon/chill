@@ -241,6 +241,8 @@ func parseFeed(ctx context.Context, reader io.Reader, original string, base *url
 	}
 	for i := range f.Episodes {
 		f.Episodes[i].Show = f.Show.Title
+		f.Episodes[i].Author = f.Show.Author
+		f.Episodes[i].Artwork = f.Show.Artwork
 	}
 	if len(f.Episodes) == 0 {
 		return Feed{}, fmt.Errorf("feed contains no playable audio episodes")
