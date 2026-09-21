@@ -1,4 +1,4 @@
-// Package main implements chill, a terminal radio and podcast player.
+// Package main implements chill, a terminal audio, radio, and podcast player.
 // It uses a client-server architecture
 // where a background daemon manages mpv playback and clients communicate
 // over a Unix socket.
@@ -113,6 +113,7 @@ func randInt(n int) int {
 }
 
 func main() {
+	promoteTrailingPlaybackFlags()
 	// commands
 	daemon := flag.Bool("daemon", false, "run as daemon")
 	repl := flag.Bool("i", false, "interactive mode (repl)")
@@ -132,13 +133,38 @@ func main() {
 	// options
 	station := flag.String("station", "", "station to play")
 	vol := flag.String("vol", "", "set volume (0-100, +5, -10, up, down)")
-	seek := flag.String("seek", "", "jump within a podcast (-30, +30, 2m)")
-	speed := flag.String("speed", "", "set podcast playback speed (0.5-3)")
+	seek := flag.String("seek", "", "jump within finite media (-30, +30, 2m)")
+	speed := flag.String("speed", "", "set finite-media playback speed (0.5-3)")
 	eqPreset := flag.String("eq", "", "set the 10-band EQ preset")
+	shuffle := flag.Bool("shuffle", false, "shuffle queued media")
+	repeat := flag.String("repeat", "", "repeat mode: off, all, or one")
 
 	flag.Usage = printCLIHelp
 	flag.Parse()
 	enableANSI()
+	if *fg {
+		if err := saveForegroundQueueModes(*shuffle, *repeat); err != nil {
+			printResult("", err)
+			return
+		}
+	} else if *shuffle || *repeat != "" {
+		if err := ensureDaemon(); err != nil {
+			printResult("", err)
+			return
+		}
+		if *shuffle {
+			if _, err := ask("shuffle on"); err != nil {
+				printResult("", err)
+				return
+			}
+		}
+		if *repeat != "" {
+			if _, err := ask("repeat " + *repeat); err != nil {
+				printResult("", err)
+				return
+			}
+		}
+	}
 	applyStartupEqualizer := func() bool {
 		if *eqPreset == "" {
 			return true
@@ -149,8 +175,8 @@ func main() {
 		}
 		return true
 	}
-	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics") {
-		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, and lyrics commands"))
+	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics" && flag.Arg(0) != "queue" && flag.Arg(0) != "playlist" && flag.Arg(0) != "library") {
+		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, lyrics, queue, playlist, and library commands"))
 		return
 	}
 	if flag.NArg() > 0 {
@@ -169,10 +195,25 @@ func main() {
 			}
 			if len(args) == 1 {
 				printResult(clientResume())
-			} else if len(args) == 2 {
-				printResult(clientPlay(args[1]))
+			} else if len(args) >= 2 {
+				if len(args) == 2 && findStation(args[1]) != nil {
+					printResult(clientPlay(args[1]))
+					return
+				}
+				ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+				defer cancel()
+				items, err := loadMediaInputs(ctx, args[1:])
+				if err != nil {
+					printResult("", err)
+					return
+				}
+				if *fg {
+					printResult("", runForegroundMediaItems(items))
+				} else {
+					printResult(playMediaItems(items))
+				}
 			} else {
-				printResult("", fmt.Errorf("usage: chill play [station]"))
+				printResult("", fmt.Errorf("usage: chill play [station|file|folder|playlist|url]"))
 			}
 			return
 		case "volume":
@@ -201,6 +242,63 @@ func main() {
 				printResult("", fmt.Errorf("usage: chill status [--json]"))
 			}
 			return
+		case "queue":
+			queueArgs := args[1:]
+			if *jsonOutput {
+				queueArgs = append(queueArgs, "--json")
+			}
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runQueueCommand(ctx, queueArgs))
+			return
+		case "playlist":
+			playlistArgs := args[1:]
+			if *jsonOutput {
+				playlistArgs = append(playlistArgs, "--json")
+			}
+			if *fg {
+				playlistArgs = append(playlistArgs, "--fg")
+			}
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runPlaylistCommand(ctx, playlistArgs))
+			return
+		case "library":
+			libraryArgs := args[1:]
+			if *jsonOutput {
+				libraryArgs = append(libraryArgs, "--json")
+			}
+			printResult(runLibraryCommand(libraryArgs))
+			return
+		case "shuffle", "repeat", "favorite", "bookmark":
+			if len(args) > 2 || (args[0] == "favorite" || args[0] == "bookmark") && len(args) != 1 {
+				printResult("", fmt.Errorf("usage: chill %s [value]", args[0]))
+				return
+			}
+			if err := ensureDaemon(); err != nil {
+				printResult("", err)
+				return
+			}
+			printResult(ask(strings.TrimSpace(strings.Join(args, " "))))
+			return
+		case "open":
+			if len(args) == 1 {
+				runReplLibrary()
+				return
+			}
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			items, err := loadMediaInputs(ctx, args[1:])
+			if err != nil {
+				printResult("", err)
+				return
+			}
+			if *fg {
+				printResult("", runForegroundMediaItems(items))
+				return
+			}
+			printResult(playMediaItems(items))
+			return
 		}
 	}
 	if flag.NArg() > 0 && (flag.Arg(0) == "podcasts" || flag.Arg(0) == "podcast") {
@@ -210,6 +308,9 @@ func main() {
 		args := flag.Args()[1:]
 		if *jsonOutput {
 			args = append(args, "--json")
+		}
+		if *fg {
+			args = append(args, "--fg")
 		}
 		if len(args) == 0 {
 			runRepl("")
@@ -273,6 +374,24 @@ func main() {
 		} else {
 			printResult(clientPodcastControl(flag.Arg(0), arg))
 		}
+		return
+	}
+	if flag.NArg() > 0 && isMediaInput(flag.Arg(0)) {
+		if !applyStartupEqualizer() {
+			return
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		items, err := loadMediaInputs(ctx, flag.Args())
+		if err != nil {
+			printResult("", err)
+			return
+		}
+		if *fg {
+			printResult("", runForegroundMediaItems(items))
+			return
+		}
+		printResult(playMediaItems(items))
 		return
 	}
 	if *jsonOutput {
@@ -370,6 +489,33 @@ func main() {
 		}
 		printResult(clientPlay(s))
 	}
+}
+
+// promoteTrailingPlaybackFlags keeps the conventional `chill file --fg`
+// spelling working with Go's flag parser, which otherwise stops at file.
+func promoteTrailingPlaybackFlags() {
+	args := os.Args[1:]
+	var promoted, rest []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--fg", "-fg", "--shuffle", "-shuffle":
+			promoted = append(promoted, args[i])
+		case "--repeat", "-repeat", "--eq", "-eq":
+			if i+1 < len(args) {
+				promoted = append(promoted, args[i], args[i+1])
+				i++
+			} else {
+				rest = append(rest, args[i])
+			}
+		default:
+			if strings.HasPrefix(args[i], "--repeat=") || strings.HasPrefix(args[i], "-repeat=") || strings.HasPrefix(args[i], "--eq=") || strings.HasPrefix(args[i], "-eq=") {
+				promoted = append(promoted, args[i])
+			} else {
+				rest = append(rest, args[i])
+			}
+		}
+	}
+	os.Args = append([]string{os.Args[0]}, append(promoted, rest...)...)
 }
 
 // buildVersion returns the version this binary was built from, which the go

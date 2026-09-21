@@ -160,8 +160,14 @@ func startDaemon() error {
 
 // clientPlay starts playing the specified station via the daemon.
 func clientPlay(station string) (string, error) {
-	if err := checkRequirements(); err != nil {
-		return "", err
+	selected := findStation(station)
+	if station == "" {
+		selected = findStation(defaultStation())
+	}
+	if selected != nil {
+		if err := checkMediaRequirements([]MediaItem{itemFromStation(*selected)}); err != nil {
+			return "", err
+		}
 	}
 	if err := ensureDaemon(); err != nil {
 		return "", err
@@ -237,10 +243,26 @@ func statusFacts(s *Status) []string {
 		if s.Speed != 0 && s.Speed != 1 {
 			facts = append(facts, fmt.Sprintf("%.2fx", s.Speed))
 		}
-		if s.Queued > 0 {
-			facts = append(facts, fmt.Sprintf("queued %d", s.Queued))
-		}
 		facts = append(facts, s.Episode.Show, s.Episode.Title)
+	} else if s.Item != nil && s.Item.Kind != MediaStation {
+		duration := "?"
+		if s.Duration > 0 {
+			duration = clock(s.Duration)
+		}
+		facts = append(facts, clock(s.Position)+" / "+duration)
+		if s.Speed != 0 && s.Speed != 1 {
+			facts = append(facts, fmt.Sprintf("%.2fx", s.Speed))
+		}
+		facts = append(facts, s.Item.display())
+	}
+	if s.Queued > 0 {
+		facts = append(facts, fmt.Sprintf("queued %d", s.Queued))
+	}
+	if s.Shuffle {
+		facts = append(facts, "shuffle")
+	}
+	if s.Repeat != "" && s.Repeat != "off" {
+		facts = append(facts, "repeat "+s.Repeat)
 	}
 	if s.StorageError != "" {
 		facts = append(facts, s.StorageError)
@@ -327,7 +349,12 @@ func clientResume() (string, error) {
 
 // clientSkip skips to a random different station.
 func clientSkip() (string, error) {
-	if err := checkRequirements(); err != nil {
+	stations := stationSnapshot()
+	items := make([]MediaItem, len(stations))
+	for i, station := range stations {
+		items[i] = itemFromStation(station)
+	}
+	if err := checkMediaRequirements(items); err != nil {
 		return "", err
 	}
 	if err := ensureDaemon(); err != nil {

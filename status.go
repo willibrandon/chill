@@ -82,7 +82,7 @@ type machineStatus struct {
 
 func statusJSON() (string, error) {
 	s, err := inspectDaemon()
-	result := machineStatus{ClientVersion: buildVersion(), ClientProtocol: daemonProtocol}
+	result := machineStatus{Status: Status{Queue: []MediaItem{}, PlayNext: []MediaItem{}, Repeat: "off"}, ClientVersion: buildVersion(), ClientProtocol: daemonProtocol}
 	result.Compatibility, _ = daemonCompatibility(s, result.ClientVersion)
 	result.State = "stopped"
 	if s != nil {

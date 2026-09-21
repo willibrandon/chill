@@ -24,6 +24,28 @@ type episodeProgress struct {
 	Updated time.Time `json:"updated"`
 }
 
+type downloadPreferences struct {
+	Auto             bool  `json:"auto"`               // Auto downloads new subscription episodes during sync.
+	Latest           int   `json:"latest"`             // Latest limits automatic downloads per show.
+	Concurrency      int   `json:"concurrency"`        // Concurrency bounds simultaneous transfers.
+	MaxBytes         int64 `json:"max_bytes"`          // MaxBytes caps managed on-disk media.
+	RetainPlayedDays int   `json:"retain_played_days"` // RetainPlayedDays removes old played downloads.
+}
+
+type episodeDownload struct {
+	Episode  podcast.Episode `json:"episode"`            // Episode retains stable feed identity.
+	State    string          `json:"state"`              // State tracks queued, active, ready, retry, error, or eviction.
+	Path     string          `json:"path,omitempty"`     // Path is the completed local media file.
+	Bytes    int64           `json:"bytes,omitempty"`    // Bytes is the amount downloaded.
+	Total    int64           `json:"total,omitempty"`    // Total is the expected size when known.
+	SHA256   string          `json:"sha256,omitempty"`   // SHA256 verifies the completed file.
+	Error    string          `json:"error,omitempty"`    // Error describes the latest failure.
+	Pinned   bool            `json:"pinned"`             // Pinned excludes the download from automatic cleanup.
+	Updated  time.Time       `json:"updated"`            // Updated drives cleanup and display ordering.
+	Attempts int             `json:"attempts,omitempty"` // Attempts counts automatic transfer retries.
+	RetryAt  time.Time       `json:"retry_at,omitzero"`  // RetryAt is the next automatic attempt.
+}
+
 // Only the daemon writes this file. REPLs may read it while the daemon is off.
 type podcastLibrary struct {
 	// Speed is the preferred podcast playback rate, from 0.5 to 3.
@@ -36,6 +58,18 @@ type podcastLibrary struct {
 	Subscriptions []podcast.Show `json:"subscriptions"`
 	// Progress maps stable episode keys to listening records.
 	Progress map[string]episodeProgress `json:"progress"`
+	// DownloadSettings controls automatic downloads and retention.
+	DownloadSettings downloadPreferences `json:"download_settings"`
+	// Downloads maps episode keys to managed offline files.
+	Downloads map[string]episodeDownload `json:"downloads"`
+	// Inbox contains the newest known episodes across subscriptions.
+	Inbox []podcast.Episode `json:"inbox"`
+	// Syncing reports an active subscription refresh.
+	Syncing bool `json:"syncing"`
+	// LastSync is the last completed inbox refresh.
+	LastSync time.Time `json:"last_sync,omitzero"`
+	// SyncError summarizes feeds that could not be refreshed.
+	SyncError string `json:"sync_error,omitempty"`
 }
 
 func podcastPath() string {
@@ -46,7 +80,8 @@ func podcastPath() string {
 }
 
 func loadPodcastLibrary() (*podcastLibrary, error) {
-	l := &podcastLibrary{Version: 1, Country: "us", Speed: 1, Subscriptions: []podcast.Show{}, Progress: map[string]episodeProgress{}}
+	l := &podcastLibrary{Version: 1, Country: "us", Speed: 1, Subscriptions: []podcast.Show{}, Progress: map[string]episodeProgress{},
+		DownloadSettings: downloadPreferences{Latest: 1, Concurrency: 2, MaxBytes: 10 << 30, RetainPlayedDays: 30}, Downloads: map[string]episodeDownload{}, Inbox: []podcast.Episode{}}
 	data, err := os.ReadFile(podcastPath())
 	if os.IsNotExist(err) {
 		return l, nil
@@ -60,11 +95,35 @@ func loadPodcastLibrary() (*podcastLibrary, error) {
 	if l.Version != 1 {
 		return nil, fmt.Errorf("unsupported podcasts.json version %d", l.Version)
 	}
+	// An interrupted daemon cannot still own a synchronization job.
+	l.Syncing = false
 	if _, err := podcast.Country(l.Country); err != nil {
 		return nil, err
 	}
 	if l.Progress == nil {
 		l.Progress = map[string]episodeProgress{}
+	}
+	if l.Downloads == nil {
+		l.Downloads = map[string]episodeDownload{}
+	}
+	if l.Inbox == nil {
+		l.Inbox = []podcast.Episode{}
+	}
+	for key, download := range l.Downloads {
+		if download.Episode.Key() != key || !podcast.ValidURL(download.Episode.URL) || !podcast.ValidURL(download.Episode.FeedURL) {
+			return nil, fmt.Errorf("invalid podcast download in podcasts.json")
+		}
+		if download.State != "queued" && download.State != "downloading" && download.State != "retrying" && download.State != "ready" && download.State != "error" && download.State != "evicted" {
+			return nil, fmt.Errorf("invalid podcast download state in podcasts.json")
+		}
+		if download.State == "downloading" {
+			download.State = "queued"
+			download.Updated = time.Now().UTC()
+			l.Downloads[key] = download
+		}
+	}
+	if l.DownloadSettings.Latest < 1 || l.DownloadSettings.Latest > 20 || l.DownloadSettings.Concurrency < 1 || l.DownloadSettings.Concurrency > 8 || l.DownloadSettings.MaxBytes < 100<<20 || l.DownloadSettings.RetainPlayedDays < 0 || l.DownloadSettings.RetainPlayedDays > 3650 {
+		return nil, fmt.Errorf("invalid podcast download settings")
 	}
 	for _, show := range l.Subscriptions {
 		if !podcast.ValidURL(show.FeedURL) {

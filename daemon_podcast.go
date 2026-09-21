@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -35,62 +36,63 @@ func (d *Daemon) playEpisode(arg string) string {
 	if !req.Restart && d.episode != nil && e.Key() == d.episode.Key() && (d.state == "playing" || d.state == "paused") {
 		return d.resume()
 	}
-	l, err := d.podcastLibrary()
-	if err != nil {
-		return fail(err.Error())
-	}
-	offset := l.resume(e)
-	if req.Restart {
-		offset = 0
-	}
-	queue, history := d.episodeQueue, d.episodeHistory
-	if d.episode != nil {
-		history = append(history, *d.episode)
-		if len(history) > 100 {
-			history = history[len(history)-100:]
-		}
-	}
-	d.kill()
-	d.episodeQueue, d.episodeHistory = queue, history
-	d.episode = &e
-	d.episodeOffset, d.episodeDuration = offset, time.Duration(e.Duration*float64(time.Second))
-	if err := d.startEpisodeCache(); err != nil {
-		d.state, d.lastError = "failed", err.Error()
-		return fail(err.Error())
-	}
-	if err := d.startPlayback(); err != nil {
-		d.state, d.lastError = "failed", err.Error()
-		d.closeEpisodeCache()
-		return fail(err.Error())
-	}
-	d.scheduleProgress()
-	return ok("loading: " + e.Show + " — " + e.Title)
+	return d.playMediaItem(itemFromEpisode(e), req.Restart, true)
 }
 
 func (d *Daemon) startEpisodeCache() error {
+	d.episodeLocal = ""
+	if library, err := d.podcastLibrary(); err == nil {
+		if download, ok := library.Downloads[d.episode.Key()]; ok && download.State == "ready" && d.offlineFailed != d.episode.Key() {
+			valid, validationErr := validEpisodeDownload(download)
+			if valid {
+				d.episodeLocal = download.Path
+				d.probeEpisodeDuration(download.Path, nil)
+				return nil
+			}
+			reason := "download integrity check failed"
+			if validationErr != nil {
+				reason = validationErr.Error()
+			}
+			download = invalidEpisodeDownload(download, reason)
+			library.Downloads[d.episode.Key()] = download
+			_ = library.commit(*library)
+		}
+	}
 	cache, err := episode.Open(d.episode.URL)
 	if err != nil {
 		return err
 	}
 	d.episodeCache = cache
+	d.probeEpisodeDuration("", cache)
+	return nil
+}
+
+func (d *Daemon) probeEpisodeDuration(localPath string, cache *episode.Cache) {
 	go func() {
-		<-cache.Done()
-		path, err := cache.CompletedPath()
-		if err != nil {
-			return
+		path := localPath
+		if cache != nil {
+			<-cache.Done()
+			var err error
+			path, err = cache.CompletedPath()
+			if err != nil {
+				return
+			}
 		}
-		out, _, err := diagnosticCommandContext(cache.Context(), "ffprobe", 10*time.Second, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
+		probeContext := context.Background()
+		if cache != nil {
+			probeContext = cache.Context()
+		}
+		out, _, err := diagnosticCommandContext(probeContext, "ffprobe", 10*time.Second, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
 		seconds, parseErr := strconv.ParseFloat(strings.TrimSpace(out), 64)
 		if err != nil || parseErr != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 365*24*3600 {
 			return
 		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.episodeCache == cache {
+		if cache == nil && d.episodeLocal == path || cache != nil && d.episodeCache == cache {
 			d.episodeDuration = time.Duration(seconds * float64(time.Second))
 		}
 	}()
-	return nil
 }
 
 func (d *Daemon) closeEpisodeCache() {
@@ -111,8 +113,44 @@ func (d *Daemon) saveEpisode(ended bool) {
 	if d.episode == nil || d.podcasts == nil {
 		return
 	}
+	key := d.episode.Key()
+	wasPlayed := d.podcasts.Progress[key].Played
 	if err := d.podcasts.record(*d.episode, d.episodePosition().Seconds(), d.episodeDuration.Seconds(), ended || d.state == "ended"); err != nil {
 		d.storageError = "could not save podcast progress: " + err.Error()
+	} else {
+		d.storageError = ""
+		if !wasPlayed && d.podcasts.Progress[key].Played {
+			d.enforceDownloadRetentionLocked()
+			if err := d.podcasts.commit(*d.podcasts); err != nil {
+				d.storageError = "could not apply download retention: " + err.Error()
+			}
+		}
+	}
+}
+
+func (d *Daemon) saveCurrentProgress(ended bool) {
+	if d.current == nil || !d.current.finite() {
+		return
+	}
+	if d.episode != nil {
+		d.saveEpisode(ended)
+		return
+	}
+	library, err := d.mediaLibrary()
+	if err != nil {
+		d.storageError = "could not save listening progress: " + err.Error()
+		return
+	}
+	position, duration := d.episodePosition().Seconds(), d.episodeDuration.Seconds()
+	threshold := duration - 60
+	if duration < 120 {
+		threshold = duration / 2
+	}
+	played := ended || duration > 0 && position >= threshold
+	library.Resume[d.current.ID] = resumePoint{Position: max(0, position), Duration: duration, Played: played, Updated: time.Now().UTC()}
+	library.recordRecent(*d.current)
+	if err := library.commit(); err != nil {
+		d.storageError = "could not save listening progress: " + err.Error()
 	} else {
 		d.storageError = ""
 	}
@@ -122,7 +160,7 @@ func (d *Daemon) scheduleProgress() {
 	if d.progressTimer != nil {
 		d.progressTimer.Stop()
 	}
-	if d.episode == nil || d.player == nil {
+	if d.current == nil || !d.current.finite() || d.player == nil {
 		return
 	}
 	generation := d.generation
@@ -133,39 +171,57 @@ func (d *Daemon) scheduleProgress() {
 			return
 		}
 		if d.state == "playing" {
-			d.saveEpisode(false)
+			d.saveCurrentProgress(false)
 		}
 		d.scheduleProgress()
 	})
 }
 
 func (d *Daemon) finishEpisode() {
-	d.saveEpisode(true)
+	d.finishFiniteItem()
+}
+
+func (d *Daemon) finishFiniteItem() {
+	d.saveCurrentProgress(true)
 	d.episodeOffset = d.episodePosition()
-	d.closePlayer()
-	d.closeEpisodeCache()
 	if d.progressTimer != nil {
 		d.progressTimer.Stop()
 		d.progressTimer = nil
 	}
+	if d.library != nil && d.library.Repeat == "one" && d.current != nil {
+		d.closePlayer()
+		d.closeEpisodeCache()
+		d.state, d.lastError, d.paused = "ended", "", false
+		item := *d.current
+		d.playMediaItem(item, true, false)
+		return
+	}
+	if item, ok := d.nextQueued(); ok {
+		if d.advanceGapless(item) {
+			return
+		}
+		d.closePlayer()
+		d.closeEpisodeCache()
+		d.state, d.lastError, d.paused = "ended", "", false
+		d.playMediaItem(item, false, true)
+		return
+	}
+	d.closePlayer()
+	d.closeEpisodeCache()
 	d.state, d.lastError, d.paused = "ended", "", false
-	if len(d.episodeQueue) > 0 {
-		d.podcastQueueCommand("next", "")
+	if d.library != nil && d.library.Repeat == "all" && len(d.library.Cycle) > 0 {
+		d.playNextItem()
 	}
 }
 
 func (d *Daemon) playbackSpeed() float64 {
-	if d.speed == 0 {
+	if d.rate == 0 {
 		return 1
 	}
-	return d.speed
+	return d.rate
 }
 
 func (d *Daemon) episodeSpeed(arg string) string {
-	l, err := d.podcastLibrary()
-	if err != nil {
-		return fail(err.Error())
-	}
 	if arg == "" {
 		return ok(fmt.Sprintf("speed: %.2fx", d.playbackSpeed()))
 	}
@@ -176,66 +232,56 @@ func (d *Daemon) episodeSpeed(arg string) string {
 	if err != nil || math.IsNaN(v) || v < 0.5 || v > 3 {
 		return fail("speed must be between 0.5 and 3")
 	}
-	if d.episode != nil && d.player != nil {
+	if d.current != nil && d.current.finite() && d.player != nil {
 		if err := d.player.command("set_property", "speed", v); err != nil {
 			return fail(err.Error())
 		}
 	}
-	next := *l
-	next.Speed = v
-	if err := l.commit(next); err != nil {
-		if d.episode != nil && d.player != nil {
-			_ = d.player.command("set_property", "speed", d.playbackSpeed())
+	previous := d.playbackSpeed()
+	if d.episode != nil || d.current == nil {
+		l, err := d.podcastLibrary()
+		if err != nil {
+			return fail(err.Error())
 		}
-		return fail(err.Error())
+		next := *l
+		next.Speed = v
+		if err := l.commit(next); err != nil {
+			if d.current != nil && d.current.finite() && d.player != nil {
+				_ = d.player.command("set_property", "speed", previous)
+			}
+			return fail(err.Error())
+		}
+		d.speed = v
 	}
-	d.speed = v
-	return ok(fmt.Sprintf("podcast speed: %.2fx", v))
+	d.rate = v
+	return ok(fmt.Sprintf("speed: %.2fx", v))
 }
 
 func (d *Daemon) podcastQueueCommand(action, arg string) string {
 	switch action {
 	case "queue":
-		b, _ := json.Marshal(d.episodeQueue)
+		var episodes []podcast.Episode
+		for _, item := range d.queueItems() {
+			if item.Episode != nil {
+				episodes = append(episodes, *item.Episode)
+			}
+		}
+		b, _ := json.Marshal(episodes)
 		return ok(string(b))
 	case "queue-clear":
-		d.episodeQueue = nil
-		return ok("queue cleared")
+		return d.queueCommand("queue-clear", "")
 	case "podcast-queue":
 		var e podcast.Episode
 		if json.Unmarshal([]byte(arg), &e) != nil || !podcast.ValidURL(e.URL) || !podcast.ValidURL(e.FeedURL) {
 			return fail("invalid episode")
 		}
-		if len(d.episodeQueue) >= 1000 {
-			return fail("queue is full")
-		}
-		d.episodeQueue = append(d.episodeQueue, e)
-		if d.player == nil && d.retryTimer == nil {
-			return d.podcastQueueCommand("next", "")
-		}
-		return ok("queued: " + podcast.Text(e.Title))
+		item := itemFromEpisode(e)
+		data, _ := json.Marshal(queueRequest{Items: []MediaItem{item}})
+		return d.queueCommand("queue-append", string(data))
 	case "next":
-		if len(d.episodeQueue) == 0 {
-			return fail("podcast queue is empty")
-		}
-		e := d.episodeQueue[0]
-		d.episodeQueue = d.episodeQueue[1:]
-		b, _ := json.Marshal(episodeRequest{Episode: e})
-		return d.playEpisode(string(b))
+		return d.playNextItem()
 	case "prev":
-		if d.episode == nil {
-			return fail("no podcast playing")
-		}
-		if d.episodePosition() > 3*time.Second || len(d.episodeHistory) == 0 {
-			return d.seekEpisode(strconv.FormatFloat(-d.episodePosition().Seconds(), 'f', 6, 64))
-		}
-		history := d.episodeHistory[:len(d.episodeHistory)-1]
-		e := d.episodeHistory[len(d.episodeHistory)-1]
-		d.episodeQueue = append([]podcast.Episode{*d.episode}, d.episodeQueue...)
-		b, _ := json.Marshal(episodeRequest{Episode: e, Restart: true})
-		result := d.playEpisode(string(b))
-		d.episodeHistory = history
-		return result
+		return d.previousItem()
 	}
 	return fail("unknown queue command")
 }
@@ -255,8 +301,8 @@ func seekDelta(arg string) (time.Duration, error) {
 }
 
 func (d *Daemon) seekEpisode(arg string) string {
-	if d.episode == nil {
-		return fail("seeking is available while playing a podcast")
+	if d.current == nil || !d.current.finite() {
+		return fail("seeking is available while playing finite media")
 	}
 	delta, err := seekDelta(arg)
 	if err != nil {
@@ -266,7 +312,7 @@ func (d *Daemon) seekEpisode(arg string) string {
 	if d.episodeDuration > 0 {
 		target = min(target, max(0, d.episodeDuration-time.Second))
 	}
-	d.saveEpisode(false)
+	d.saveCurrentProgress(false)
 	d.closePlayer()
 	d.generation++ // invalidate a reconnect, old frames, and progress timers
 	if d.resolveCancel != nil {
@@ -279,7 +325,7 @@ func (d *Daemon) seekEpisode(arg string) string {
 	}
 	d.retries, d.retryAt = 0, time.Time{}
 	d.episodeOffset = target
-	if d.episodeCache == nil {
+	if d.episode != nil && d.episodeCache == nil && d.episodeLocal == "" {
 		if err := d.startEpisodeCache(); err != nil {
 			d.state, d.lastError = "failed", err.Error()
 			return fail(err.Error())

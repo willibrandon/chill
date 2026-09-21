@@ -1,9 +1,23 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// TestSplitCommandLine checks portable quoting for paths and playlist names.
+func TestSplitCommandLine(t *testing.T) {
+	input := `play "My Album/song.flac" C:\Music\one.flac \\server\music\two.flac 'two songs.flac' one\ two.flac ""`
+	want := []string{"play", "My Album/song.flac", `C:\Music\one.flac`, `\\server\music\two.flac`, "two songs.flac", "one two.flac", ""}
+	got, err := splitCommandLine(input)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("split = %#v, %v; want %#v", got, err, want)
+	}
+	if _, err := splitCommandLine(`play "unfinished`); err == nil {
+		t.Fatal("unfinished quote was accepted")
+	}
+}
 
 // TestSuggestEmpty checks an empty prompt does not open suggestions.
 func TestSuggestEmpty(t *testing.T) {

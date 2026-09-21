@@ -168,3 +168,54 @@ func TestResolveDirectAudioAndCancellation(t *testing.T) {
 		t.Fatal("cancelled resolution dispatched", err)
 	}
 }
+
+// TestPCMLocalTransitionKeepsOutputAndUsesPreload checks the gapless local path.
+func TestPCMLocalTransitionKeepsOutputAndUsesPreload(t *testing.T) {
+	for _, name := range []string{"mpv", "ffmpeg"} {
+		if _, err := exec.LookPath(name); err != nil {
+			t.Fatalf("playback tests require %s: %v", name, err)
+		}
+	}
+	config := t.TempDir()
+	t.Setenv("MPV_HOME", config)
+	if err := os.WriteFile(filepath.Join(config, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, second := stereoFixture(t, 1), stereoFixture(t, 1)
+	raw, err := newPCMPlayer(55, false, false, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := raw.(*pcmPlayer)
+	defer p.close()
+	if err := p.command("loadfile", first, "replace"); err != nil {
+		t.Fatal(err)
+	}
+	output := p.output
+	p.preload(second, 0, true)
+	wait := func(kind string) {
+		t.Helper()
+		select {
+		case event := <-p.events():
+			if kind == "loaded" && !event.loaded || kind == "ended" && !event.ended {
+				t.Fatalf("wanted %s event, got %+v", kind, event)
+			}
+		case <-time.After(4 * time.Second):
+			t.Fatalf("timed out waiting for %s", kind)
+		}
+	}
+	wait("loaded")
+	wait("ended")
+	started := time.Now()
+	if !p.transition(second, 0, true) {
+		t.Fatal("preloaded transition was not available")
+	}
+	wait("loaded")
+	if p.output != output {
+		t.Fatal("local transition replaced the mpv PCM output")
+	}
+	if delay := time.Since(started); delay > 250*time.Millisecond {
+		t.Fatalf("preloaded transition took %s", delay)
+	}
+	wait("ended")
+}

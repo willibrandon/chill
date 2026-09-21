@@ -46,7 +46,18 @@ func (t *tui) openLyrics() tea.Cmd {
 			return lyricsResultMsg{id: id, err: err}
 		}
 		if status == nil || status.NowPlaying == nil {
-			return lyricsResultMsg{id: id, err: fmt.Errorf("no recognized live track")}
+			if status == nil || status.Item == nil || !status.Item.finite() {
+				return lyricsResultMsg{id: id, err: fmt.Errorf("no recognized track")}
+			}
+			item := status.Item
+			if strings.TrimSpace(item.EmbeddedLyrics) != "" {
+				return lyricsResultMsg{id: id, raw: item.display(), result: lyrics.Result{Track: item.Title, Artist: item.Artist, Album: item.Album, Plain: item.EmbeddedLyrics}}
+			}
+			if item.Title == "" {
+				return lyricsResultMsg{id: id, err: fmt.Errorf("current track has no title metadata")}
+			}
+			result, err := lyrics.NewClient().Get(ctx, item.Artist, item.Title)
+			return lyricsResultMsg{id: id, raw: item.display(), result: result, err: err}
 		}
 		result, err := lyrics.NewClient().Get(ctx, status.NowPlaying.Artist, status.NowPlaying.Title)
 		return lyricsResultMsg{id: id, raw: status.NowPlaying.Raw, result: result, err: err}

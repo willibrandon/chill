@@ -5,7 +5,8 @@
 Run `chill radio`, enter `radio` in the REPL, or press F5. The browser opens on
 favorites, recently heard tracks, optional nearby suggestions, pinned views,
 four charts, countries, genres and search. Directory playback does not modify
-`stations.json`; favorite a result when you want it to persist in the browser.
+`stations.json`; favorite a result when you want it to persist in both the F5
+radio browser and the F7 library.
 
 The directory is public and requires no account or API key. Chill discovers its
 current HTTPS mirrors through DNS, randomizes them, remembers the healthy one,
@@ -81,6 +82,9 @@ chill radio nearby none   # disable nearby suggestions
 chill radio nearby ask    # ask again in the browser
 ```
 
-Favorites, pins, and the nearby choice are stored in `radio.json` beside
-`stations.json`. Writes are locked and atomic so concurrent CLI and REPL
-changes do not lose data. The file is portable across supported platforms.
+Favorite stations are part of the universal collection in `library.json`, so
+`chill radio favorites`, F5, F7, foreground playback, and the REPL always show
+the same state. Existing radio favorites move there automatically. Pins and the
+nearby choice remain in `radio.json` beside `stations.json`. Writes are locked
+and atomic so concurrent CLI and REPL changes do not lose data. Both files are
+portable across supported platforms.

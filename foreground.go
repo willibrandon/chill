@@ -54,6 +54,7 @@ type foregroundModel struct {
 	lyricsOffset   int
 	lyricsHeading  string
 	media          *media.Service
+	library        *libraryState
 	stationHistory []Station
 	stationForward []Station
 }
@@ -394,6 +395,21 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "y":
 			m.lyricsOpen = true
 			return m, m.loadLyrics()
+		case "f", "B":
+			if m.library != nil {
+				bookmark, label := msg.String() == "B", "favorite"
+				if bookmark {
+					label = "bookmark"
+				}
+				marked, err := m.library.setMarked(itemFromStation(*m.station), bookmark, nil)
+				if err != nil {
+					m.err = err.Error()
+				} else if err := m.library.commit(); err != nil {
+					m.err = err.Error()
+				} else {
+					m.err = fmt.Sprintf("%s: %t", label, marked)
+				}
+			}
 		case "9":
 			m.setVolume(m.settings.Volume - 5)
 		case "0":
@@ -501,7 +517,7 @@ func (m *foregroundModel) View() tea.View {
 	if m.err != "" {
 		lines = append(lines, foregroundLine("error: "+m.err, m.width, styleError))
 	}
-	lines = append(lines, "", foregroundLine("q quit · Space pause · m mute · y lyrics · 9/0 volume · ←/→ seek", m.width, styleDim))
+	lines = append(lines, "", foregroundLine("q quit · Space pause · m mute · y lyrics · f favorite · B bookmark · 9/0 volume · ←/→ seek", m.width, styleDim))
 	lines = append(lines, foregroundLine("h/l band · j/k gain · x zero · e/E preset · r flat · c custom", m.width, styleDim))
 	if m.height > 0 {
 		lines = lines[:min(len(lines), m.height)]
@@ -520,12 +536,19 @@ func (m *foregroundModel) close() {
 }
 
 func runForeground(station *Station) error {
-	if err := checkRequirements(); err != nil {
+	if err := checkMediaRequirements([]MediaItem{itemFromStation(*station)}); err != nil {
 		return err
 	}
 	settings, err := loadPlaybackSettings()
 	if err != nil {
 		return fmt.Errorf("reading playback settings: %w", err)
+	}
+	library, err := loadLibrary()
+	if err != nil {
+		return err
+	}
+	if err := migrateRadioFavorites(library); err != nil {
+		return err
 	}
 	p, err := startForegroundPCM(station, settings, false, false, 0)
 	if err != nil {
@@ -533,7 +556,7 @@ func runForeground(station *Station) error {
 	}
 	model := &foregroundModel{
 		station: station, player: p, settings: settings, eq: settings.equalizer(),
-		state: "loading", vibe: vibes[randInt(len(vibes))],
+		state: "loading", vibe: vibes[randInt(len(vibes))], library: library,
 	}
 	program := tea.NewProgram(model)
 	mediaService, mediaErr := media.New(func(command media.Command) { program.Send(command) })

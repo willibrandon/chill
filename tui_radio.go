@@ -62,7 +62,7 @@ func (t *tui) openRadio() tea.Cmd {
 		r.page = radioPage{kind: "home", title: "Radio"}
 	}
 	return t.radioRequest(func(ctx context.Context) radioResultMsg {
-		library, err := r.store.Load()
+		library, err := loadRadioViewLibrary(r.store)
 		if err != nil {
 			return radioResultMsg{err: err}
 		}
@@ -410,7 +410,7 @@ func (t *tui) radioRefresh() tea.Cmd {
 		var err error
 		switch page.kind {
 		case "home":
-			library, loadErr := r.store.Load()
+			library, loadErr := loadRadioViewLibrary(r.store)
 			history, historyErr := tracklog.DefaultStore().Load(200)
 			if loadErr != nil {
 				err = loadErr
@@ -425,7 +425,7 @@ func (t *tui) radioRefresh() tea.Cmd {
 		case "tags":
 			page.tags, err = client.Tags(ctx)
 		case "favorites":
-			library, e := r.store.Load()
+			library, e := loadRadioViewLibrary(r.store)
 			err = e
 			page.stations = library.Favorites
 			return radioResultMsg{page: &page, library: &library, err: err}
@@ -476,12 +476,18 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 					return radioResultMsg{note: "Could not infer a country; use radio nearby <code>"}
 				}
 				library, err := r.store.SetCountry(code)
+				if err == nil {
+					library, err = attachRadioFavorites(library)
+				}
 				return radioResultMsg{library: &library, note: "Nearby country: " + code, err: err}
 			})
 		case "n":
 			r.consent = false
 			return t.radioRequest(func(context.Context) radioResultMsg {
 				library, err := r.store.SetCountry("NONE")
+				if err == nil {
+					library, err = attachRadioFavorites(library)
+				}
 				return radioResultMsg{library: &library, note: "Nearby suggestions disabled", err: err}
 			})
 		case "esc", "ctrl+c":
@@ -576,13 +582,30 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "l":
 		t.closeRadio()
 		return t.openLyrics()
-	case "enter", "f", "a", "p":
+	case "enter", "f", "a", "p", "q", "n":
 		if r.loading || len(rows) == 0 {
 			return nil
 		}
 		index := rows[min(r.page.selected, len(rows)-1)]
 		if key == "enter" {
 			return t.radioSelect(index)
+		}
+		if (key == "q" || key == "n") && !t.radioFG && (r.page.kind == "stations" || r.page.kind == "favorites" || r.page.kind == "history") {
+			var station Station
+			if r.page.kind == "history" {
+				entry := r.page.history[index]
+				station = Station{Name: entry.Station, URL: entry.StationURL, Desc: entry.Station, Artwork: entry.Artwork}
+			} else {
+				station = stationFromCatalog(r.page.stations[index])
+			}
+			action := "queue-append"
+			if key == "n" {
+				action = "queue-next"
+			}
+			return t.radioRequest(func(context.Context) radioResultMsg {
+				out, err := sendItems(action, []MediaItem{itemFromStation(station)})
+				return radioResultMsg{note: out, err: err}
+			})
 		}
 		if key == "f" && (r.page.kind == "stations" || r.page.kind == "favorites" || r.page.kind == "history") {
 			var station radio.Station
@@ -593,7 +616,7 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 				station = r.page.stations[index]
 			}
 			return t.radioRequest(func(context.Context) radioResultMsg {
-				library, added, err := r.store.ToggleFavorite(station)
+				library, added, _, err := updateRadioFavorite(r.store, station, nil)
 				note := "Removed favorite: " + station.Name
 				if added {
 					note = "Favorite: " + station.Name
@@ -636,6 +659,9 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return t.radioRequest(func(context.Context) radioResultMsg {
 				library, added, err := r.store.TogglePin(pin)
+				if err == nil {
+					library, err = attachRadioFavorites(library)
+				}
 				note := "Unpinned: " + pin.Name
 				if added {
 					note = "Pinned: " + pin.Name
@@ -682,7 +708,7 @@ func (t *tui) radioView() tea.View {
 			}
 		}
 		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter open/play · f favorite · p pin · a save · / filter · Ctrl+F search · Ctrl+R refresh"))
+		lines[height-3] = fit(styleDim.Render("Enter open/play · q queue · n play next · f favorite · p pin · a save · / filter · Ctrl+F search · Ctrl+R refresh"))
 		footer := "o sort · [ ] page · l lyrics · Space pause · Esc back · F5 prompt"
 		if t.radioFG {
 			footer = "Enter play in foreground · o sort · [ ] page · Esc back · F5 prompt"

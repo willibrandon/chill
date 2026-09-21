@@ -6,24 +6,24 @@ session for the lifetime of the foreground screen. On Linux, a foreground
 player automatically takes a distinct MPRIS name if the daemon already owns the
 stable one.
 
-Published state includes play, pause and stopped status; station, track,
-podcast and artist text; source URL; artwork; volume; podcast duration and
+Published state includes play, pause and stopped status; station, local track,
+podcast and artist text; source URL; artwork; volume; finite-media duration and
 position; and whether next, previous, or seeking are currently meaningful.
 Updates occur on state and metadata changes and once per second while playing.
 
 ## Controls
 
-| System action | Radio | Podcast |
+| System action | Radio | Finite media |
 | --- | --- | --- |
 | Play / Pause / Toggle | Resume or pause | Resume or pause |
 | Stop | Stop audio; daemon remains available | Stop audio; daemon remains available |
-| Next | Return forward or choose another station | Play the next queued episode |
-| Previous | Return to the previous station | Restart or return to the previous episode |
-| Seek | Not advertised | Relative or absolute podcast seek |
+| Next | Play the next universal queue item, or choose another station | Play the next universal queue item |
+| Previous | Return to the previous station | Restart or return to the previous item |
+| Seek | Not advertised | Relative or absolute seek |
 | Volume | Persist a 0–100 level | Persist a 0–100 level |
 
 The previous and forward station stacks are bounded by the playback session.
-They reset when playback stops or switches to a podcast. Podcast behavior is
+They reset when playback stops or switches to finite media. Queue behavior is
 the same as the `next`, `prev`, and `seek` commands.
 
 ## Platforms

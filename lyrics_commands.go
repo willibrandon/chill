@@ -14,8 +14,15 @@ func currentLyrics(ctx context.Context) (lyrics.Result, error) {
 	if err != nil {
 		return lyrics.Result{}, err
 	}
+	if status != nil && status.Item != nil && status.Item.Kind == MediaTrack {
+		item := status.Item
+		if item.EmbeddedLyrics != "" {
+			return lyrics.Result{Track: item.Title, Artist: item.Artist, Album: item.Album, Plain: item.EmbeddedLyrics}, nil
+		}
+		return lyrics.NewClient().Get(ctx, item.Artist, item.Title)
+	}
 	if status == nil || status.NowPlaying == nil {
-		return lyrics.Result{}, fmt.Errorf("no recognized live track")
+		return lyrics.Result{}, fmt.Errorf("no recognized track")
 	}
 	return lyrics.NewClient().Get(ctx, status.NowPlaying.Artist, status.NowPlaying.Title)
 }

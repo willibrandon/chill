@@ -22,7 +22,15 @@ type replCommand struct {
 
 // replCommands contains the available REPL commands.
 var replCommands = []replCommand{
-	{"play", "[station]", "play a station"},
+	{"play", "[station|path|url]", "play a station, local file, folder, playlist, or URL"},
+	{"open", "[path]", "browse the library or play a local path"},
+	{"queue", "[command]", "show or edit the universal queue"},
+	{"playlist", "[command]", "manage saved playlists"},
+	{"library", "[recent|favorites|bookmarks]", "browse listening collections"},
+	{"shuffle", "[on|off|toggle]", "control queue shuffle"},
+	{"repeat", "[off|all|one|cycle]", "control queue repeat"},
+	{"favorite", "", "favorite or unfavorite the current item"},
+	{"bookmark", "", "bookmark or unbookmark the current item"},
 	{"vol", "[level]", "set volume (0-100, +5, -10, up, down)"},
 	{"mute", "", "toggle mute"},
 	{"skip", "", "skip to random station"},
@@ -35,12 +43,12 @@ var replCommands = []replCommand{
 	{"podcasts", "[command|feed-url]", "browse podcasts (F3; --help for commands)"},
 	{"radio", "[command]", "discover and favorite stations (F5; --help for commands)"},
 	{"history", "[--limit N|clear]", "show recently heard radio tracks"},
-	{"lyrics", "", "show lyrics for the current live track (F6)"},
-	{"notifications", "[on|off]", "control live track-change notifications"},
-	{"seek", "<seconds>", "jump within an episode (-30, +30, 2m)"},
-	{"speed", "[0.5-3]", "set podcast playback speed"},
-	{"next", "", "play the next queued episode"},
-	{"prev", "", "restart an episode or play the previous one"},
+	{"lyrics", "", "show lyrics for the current track (F6)"},
+	{"notifications", "[on|off]", "control track-change notifications"},
+	{"seek", "<seconds>", "jump within finite media (-30, +30, 2m)"},
+	{"speed", "[0.5-3]", "set finite-media playback speed"},
+	{"next", "", "play the next queued item"},
+	{"prev", "", "restart finite media or play the previous item"},
 	{"doctor", "[options]", "check setup and streams (--help for options)"},
 	{"cancel", "", "cancel diagnostics and discard queued commands"},
 	{"list", "", "list all stations"},
@@ -64,6 +72,65 @@ type suggestion struct {
 	replace string // complete replacement for suggestions containing spaces
 }
 
+// splitCommandLine gives the REPL predictable quoting on every platform.
+// Quotes group spaces and backslash escapes whitespace or quotes outside
+// single quotes. Other backslashes stay intact for Windows paths.
+func splitCommandLine(input string) ([]string, error) {
+	var words []string
+	var word strings.Builder
+	var quote rune
+	escaped, started := false, false
+	flush := func() {
+		if started {
+			words = append(words, word.String())
+			word.Reset()
+			started = false
+		}
+	}
+	for _, r := range input {
+		if escaped {
+			if r != '\'' && r != '"' && r != ' ' && r != '\t' && r != '\r' && r != '\n' {
+				word.WriteByte('\\')
+			}
+			word.WriteRune(r)
+			escaped, started = false, true
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped, started = true, true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+			started = true
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote, started = r, true
+			continue
+		}
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			flush()
+			continue
+		}
+		word.WriteRune(r)
+		started = true
+	}
+	if escaped {
+		word.WriteByte('\\')
+		started = true
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unfinished quoted argument")
+	}
+	flush()
+	return words, nil
+}
+
 // suggest returns what could complete the word at the end of input. Nothing
 // is offered for an empty line, so the list never opens on its own.
 func suggest(input string) []suggestion {
@@ -81,6 +148,11 @@ func suggest(input string) []suggestion {
 		// first word: commands, or a station name on its own
 		prefix = words[0]
 		for _, c := range replCommands {
+			// Keep the long-standing `pl` completion unambiguous; playlist
+			// appears as soon as enough of its name has been typed.
+			if c.name == "playlist" && len(prefix) < 5 {
+				continue
+			}
 			candidates = append(candidates, suggestion{text: c.name, desc: c.desc, takes: c.args != ""})
 		}
 		candidates = append(candidates, stationSuggestions()...)
@@ -104,7 +176,7 @@ func suggest(input string) []suggestion {
 		if len(words) == 2 {
 			prefix = words[1]
 		}
-		candidates = []suggestion{{text: "on", desc: "show live track changes"}, {text: "off", desc: "hide track changes"}}
+		candidates = []suggestion{{text: "on", desc: "show track changes"}, {text: "off", desc: "hide track changes"}}
 
 	case strings.EqualFold(words[0], "eq"):
 		arg := strings.TrimSpace(input[len(words[0]):])
@@ -150,7 +222,7 @@ func suggest(input string) []suggestion {
 		if len(words) == 2 {
 			prefix = words[1]
 		}
-		for _, name := range []string{"top", "search", "categories", "category", "episodes", "subscribe", "unsubscribe", "subscriptions", "country", "play", "latest", "queue", "clear", "--help"} {
+		for _, name := range []string{"top", "search", "categories", "category", "episodes", "subscribe", "unsubscribe", "subscriptions", "inbox", "sync", "download", "downloads", "auto", "country", "play", "latest", "queue", "clear", "--help"} {
 			candidates = append(candidates, suggestion{text: name, desc: "podcast command", takes: name == "search" || name == "play" || name == "episodes" || name == "subscribe" || name == "unsubscribe" || name == "category"})
 		}
 
@@ -159,22 +231,56 @@ func suggest(input string) []suggestion {
 			prefix = words[1]
 		}
 		for _, item := range []suggestion{
-			{text: "top", desc: "most-voted stations"},
-			{text: "popular", desc: "most-listened stations"},
-			{text: "trending", desc: "stations gaining listeners"},
-			{text: "random", desc: "random stations"},
-			{text: "search", desc: "search station names", takes: true},
-			{text: "country", desc: "browse a country", takes: true},
-			{text: "tag", desc: "browse a genre or tag", takes: true},
-			{text: "countries", desc: "list countries"},
-			{text: "tags", desc: "list genres and tags"},
-			{text: "favorites", desc: "favorite stations"},
-			{text: "nearby", desc: "local country suggestions", takes: true},
-			{text: "--help", desc: "radio command help"},
+			{text: "top", desc: "most-voted stations"}, {text: "popular", desc: "most-listened stations"},
+			{text: "trending", desc: "stations gaining listeners"}, {text: "random", desc: "random stations"},
+			{text: "search", desc: "search station names", takes: true}, {text: "country", desc: "browse a country", takes: true},
+			{text: "tag", desc: "browse a genre or tag", takes: true}, {text: "countries", desc: "list countries"},
+			{text: "tags", desc: "list genres and tags"}, {text: "favorites", desc: "favorite stations"},
+			{text: "nearby", desc: "local country suggestions", takes: true}, {text: "--help", desc: "radio command help"},
 		} {
 			candidates = append(candidates, item)
 		}
 
+	case strings.EqualFold(words[0], "queue") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, item := range []suggestion{
+			{text: "list", desc: "show pending items"}, {text: "add", desc: "append files, folders, playlists, or URLs", takes: true},
+			{text: "next", desc: "add to play-next", takes: true}, {text: "replace", desc: "replace pending items", takes: true},
+			{text: "play", desc: "play a numbered item", takes: true}, {text: "remove", desc: "remove a numbered item", takes: true},
+			{text: "move", desc: "reorder two positions", takes: true}, {text: "search", desc: "filter pending items", takes: true},
+			{text: "undo", desc: "undo the last queue edit"}, {text: "clear", desc: "clear pending items"},
+		} {
+			candidates = append(candidates, item)
+		}
+
+	case strings.EqualFold(words[0], "playlist") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, name := range []string{"list", "show", "play", "create", "add", "save", "remove", "move", "dedupe", "rename", "delete", "import", "export"} {
+			candidates = append(candidates, suggestion{text: name, desc: "playlist command", takes: name != "list"})
+		}
+
+	case strings.EqualFold(words[0], "library") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		for _, name := range []string{"recent", "favorites", "bookmarks", "play", "add", "next"} {
+			candidates = append(candidates, suggestion{text: name, desc: "library collection", takes: name == "play" || name == "add" || name == "next"})
+		}
+	case (strings.EqualFold(words[0], "shuffle") || strings.EqualFold(words[0], "repeat")) && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		values := []string{"on", "off", "toggle"}
+		if strings.EqualFold(words[0], "repeat") {
+			values = []string{"off", "all", "one", "cycle"}
+		}
+		for _, value := range values {
+			candidates = append(candidates, suggestion{text: value, desc: words[0] + " mode"})
+		}
 	case strings.EqualFold(words[0], "doctor"):
 		args := words[1:]
 		if !typingNewWord {
@@ -281,15 +387,17 @@ func acceptSuggestion(input string, s suggestion) string {
 // to the daemon. It returns what to show for it.
 func execute(input string) (string, error) {
 	input = strings.TrimSpace(input)
-	parts := strings.Fields(input)
+	parts, parseErr := splitCommandLine(input)
+	if parseErr != nil {
+		return "", parseErr
+	}
 	if len(parts) == 0 {
 		return "", nil
 	}
 
-	// the argument keeps its original case and spacing, for descriptions
+	// Parsed arguments keep their original case and may contain quoted spaces.
 	cmd := strings.ToLower(parts[0])
-	arg := ""
-	arg = strings.TrimSpace(input[len(parts[0]):])
+	arg := strings.Join(parts[1:], " ")
 
 	var out string
 	var err error
@@ -307,14 +415,47 @@ func execute(input string) (string, error) {
 		return clientSeek(arg)
 	case "speed", "next", "prev":
 		return clientPodcastControl(cmd, arg)
+	case "queue":
+		return runQueueCommand(context.Background(), parts[1:])
+	case "playlist":
+		return runPlaylistCommand(context.Background(), parts[1:])
+	case "library":
+		return runLibraryCommand(parts[1:])
+	case "shuffle", "repeat":
+		if err := ensureDaemon(); err != nil {
+			return "", err
+		}
+		return ask(strings.TrimSpace(cmd + " " + arg))
+	case "favorite", "bookmark":
+		if arg != "" {
+			return "", fmt.Errorf("usage: %s", cmd)
+		}
+		if !isDaemonRunning() {
+			return "", fmt.Errorf("nothing playing")
+		}
+		return ask(cmd)
+	case "open":
+		if len(parts) == 1 {
+			return "", fmt.Errorf("press F7 to browse local audio")
+		}
+		items, loadErr := loadMediaInputs(context.Background(), parts[1:])
+		if loadErr != nil {
+			return "", loadErr
+		}
+		return playMediaItems(items)
 	case "play":
-		if arg == "" {
-			arg = defaultStation()
+		if len(parts) == 1 {
+			return clientPlay(defaultStation())
 		}
-		if findStation(arg) == nil {
-			return "", fmt.Errorf("unknown station %s, try list", arg)
+		if len(parts) == 2 && findStation(parts[1]) != nil {
+			out, err = clientPlay(parts[1])
+			break
 		}
-		out, err = clientPlay(arg)
+		items, loadErr := loadMediaInputs(context.Background(), parts[1:])
+		if loadErr != nil {
+			return "", loadErr
+		}
+		return playMediaItems(items)
 
 	case "vol", "volume":
 		out, err = clientVolume(arg)
@@ -396,10 +537,21 @@ func execute(input string) (string, error) {
 
 	default:
 		// try as station name
-		if findStation(cmd) == nil {
-			return "", fmt.Errorf("unknown command %s, try help", cmd)
+		if findStation(cmd) != nil {
+			out, err = clientPlay(cmd)
+			break
 		}
-		out, err = clientPlay(cmd)
+		if len(parts) == 1 {
+			value := parts[0]
+			if _, statErr := os.Stat(value); statErr == nil || strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+				items, loadErr := loadMediaInputs(context.Background(), []string{value})
+				if loadErr != nil {
+					return "", loadErr
+				}
+				return playMediaItems(items)
+			}
+		}
+		return "", fmt.Errorf("unknown command %s, try help", cmd)
 	}
 
 	return out, err
