@@ -95,6 +95,19 @@ func TestConfiguredStationIsAUniversalInput(t *testing.T) {
 	}
 }
 
+// TestConfiguredLocalStationRemainsPlayable checks compatibility with saved decoder sources.
+func TestConfiguredLocalStationRemainsPlayable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "radio.wav")
+	item, err := itemFromStation(Station{Name: "local", URL: path}).normalized()
+	if err != nil || item.Source != path || item.Station == nil || item.Title != "local" {
+		t.Fatalf("local station = %+v, %v", item, err)
+	}
+	item.Station.URL = filepath.Join(t.TempDir(), "different.wav")
+	if _, err := item.normalized(); err == nil {
+		t.Fatal("station item accepted mismatched sources")
+	}
+}
+
 // TestLibraryRejectsInvalidSavedCollections checks strict persistent-state validation.
 func TestLibraryRejectsInvalidSavedCollections(t *testing.T) {
 	withConfigDir(t)

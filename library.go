@@ -87,9 +87,20 @@ func (item MediaItem) normalized() (MediaItem, error) {
 	}
 	switch item.Kind {
 	case MediaStation:
-		if item.Station == nil || !podcast.ValidURL(item.Source) {
+		if item.Station == nil {
 			return MediaItem{}, fmt.Errorf("invalid station item")
 		}
+		station := *item.Station
+		station.Name = strings.TrimSpace(station.Name)
+		station.URL = strings.TrimSpace(station.URL)
+		station.Desc = strings.TrimSpace(station.Desc)
+		if station.Name == "" || station.URL == "" || station.URL != item.Source {
+			return MediaItem{}, fmt.Errorf("invalid station item")
+		}
+		if station.Desc == "" {
+			station.Desc = station.Name
+		}
+		item.Station = &station
 	case MediaPodcast:
 		if item.Episode == nil || !podcast.ValidURL(item.Episode.FeedURL) || !podcast.ValidURL(item.Source) {
 			return MediaItem{}, fmt.Errorf("invalid podcast item")
@@ -108,7 +119,11 @@ func (item MediaItem) normalized() (MediaItem, error) {
 		return MediaItem{}, fmt.Errorf("unknown media kind %q", item.Kind)
 	}
 	if item.Title == "" {
-		item.Title = filepath.Base(item.Source)
+		if item.Station != nil {
+			item.Title = item.Station.Desc
+		} else {
+			item.Title = filepath.Base(item.Source)
+		}
 	}
 	if item.ID == "" {
 		if item.Episode != nil {
