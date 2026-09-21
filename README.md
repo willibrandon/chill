@@ -65,44 +65,44 @@ Use `chill update` for Go installs and release binaries,
 ## Usage
 
 ```bash
-chill                   # open the interactive REPL
-chill chillhop          # play specific station
-chill -i                # same as chill
-chill podcasts          # browse podcasts
-chill podcasts --help   # podcast CLI commands
-chill radio             # browse internet radio
-chill radio search jazz # search stations
+chill                    # open the interactive REPL
+chill chillhop           # play specific station
+chill -i                 # same as chill
+chill podcasts           # browse podcasts
+chill podcasts --help    # podcast CLI commands
+chill radio              # browse internet radio
+chill radio search jazz  # search stations
 chill radio top --play 1 # play the first result
-chill history           # recently heard live tracks
-chill lyrics            # lyrics for the current live track
-chill notifications on  # opt in to track-change notifications
-chill seek -30          # jump back 30 seconds in an episode
-chill speed 1.5         # podcast playback speed
-chill --skip            # skip to random station
-chill --toggle          # pause/resume, or play the default station when stopped
-chill --vol 60          # set volume (also +5, -10, up, down)
-chill eq Rock           # select an equalizer preset
-chill eq --band 1k +3   # edit one band and switch to Custom
-chill eq list           # list every built-in preset
-chill --eq Rock --fg    # start foreground playback with a preset
-chill --mute            # toggle mute
-chill --status          # show what's playing
-chill --status --json   # show status as JSON
-chill doctor            # check mpv, FFmpeg, yt-dlp, runtime, and daemon versions
-chill doctor --stations # check station streams
-chill doctor --stream n # check one station
-chill doctor --logs     # show startup logs
-chill --stop            # stop playback
-chill --list            # show all stations
-chill add n url desc    # save your own station
-chill remove n          # remove a custom station or restore a built-in
-chill default n         # choose the station played by chill
-chill --sleep 45m       # stop playback after 45 minutes
-chill --sleep off       # cancel the sleep timer
-chill --version         # show version
-chill --help            # show help
-chill update            # install the latest release
-chill --fg              # run in foreground (no daemon)
+chill history            # recently heard live tracks
+chill lyrics             # lyrics for the current live track
+chill notifications on   # opt in to track-change notifications
+chill seek -30           # jump back 30 seconds in an episode
+chill speed 1.5          # podcast playback speed
+chill --skip             # skip to random station
+chill --toggle           # pause/resume, or play the default station when stopped
+chill --vol 60           # set volume (also +5, -10, up, down)
+chill eq Rock            # select an equalizer preset
+chill eq --band 1k +3    # edit one band and switch to Custom
+chill eq list            # list every built-in preset
+chill --eq Rock --fg     # start foreground playback with a preset
+chill --mute             # toggle mute
+chill --status           # show what's playing
+chill --status --json    # show status as JSON
+chill doctor             # check mpv, FFmpeg, yt-dlp, runtime, and daemon versions
+chill doctor --stations  # check station streams
+chill doctor --stream n  # check one station
+chill doctor --logs      # show startup logs
+chill --stop             # stop playback
+chill --list             # show all stations
+chill add n url desc     # save your own station
+chill remove n           # remove a custom station or restore a built-in
+chill default n          # choose the station played by chill
+chill --sleep 45m        # stop playback after 45 minutes
+chill --sleep off        # cancel the sleep timer
+chill --version          # show version
+chill --help             # show help
+chill update             # install the latest release
+chill --fg               # run in foreground (no daemon)
 ```
 
 ## Architecture
