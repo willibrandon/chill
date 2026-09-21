@@ -29,6 +29,8 @@ type lyricsResultMsg struct {
 }
 
 func (t *tui) openLyrics() tea.Cmd {
+	t.closeProviders()
+	t.closeAudio()
 	l := &t.lyrics
 	l.open, l.loading, l.note = true, true, ""
 	t.viz.focused, t.viz.fullscreen = false, false

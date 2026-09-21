@@ -10,6 +10,9 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+// RunHelper is unused on Linux, where notifications use D-Bus directly.
+func RunHelper(_ []string) (bool, error) { return false, nil }
+
 // Show presents a transient track-change notification.
 func Show(title, body, artwork string) error {
 	connection, err := dbus.ConnectSessionBus()

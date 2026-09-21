@@ -9,15 +9,17 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
 
 type doctorOptions struct {
-	stations bool
-	stream   string
-	timeout  time.Duration
-	logs     bool
+	stations  bool
+	stream    string
+	timeout   time.Duration
+	logs      bool
+	providers bool
 }
 
 func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
@@ -29,6 +31,7 @@ func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
 	flags.StringVar(&options.stream, "stream", "", "resolve one station name or URL without playing audio")
 	flags.DurationVar(&options.timeout, "timeout", 45*time.Second, "timeout per stream check")
 	flags.BoolVar(&options.logs, "logs", false, "include the most recent daemon startup log")
+	flags.BoolVar(&options.providers, "providers", false, "validate enabled provider credentials and connections")
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
@@ -94,6 +97,48 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 		r.check("WARN", "YouTube runtime", "Deno not found; current yt-dlp needs a JavaScript runtime for full YouTube support. Install deno or configure another supported runtime in yt-dlp")
 	}
 
+	settings, settingsErr := loadPlaybackSettings()
+	if settingsErr != nil {
+		r.check("FAIL", "audio settings", settingsErr.Error())
+	} else if mpv == "" {
+		r.check("FAIL", "audio devices", "mpv is required to enumerate output devices")
+	} else {
+		deviceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		devices, deviceErr := listAudioDevices(deviceCtx, settings.Audio.Device)
+		cancel()
+		if deviceErr != nil {
+			r.check("FAIL", "audio devices", deviceErr.Error())
+		} else {
+			selected := settings.Audio.Device == "auto" || slices.ContainsFunc(devices, func(device AudioDevice) bool { return device.ID == settings.Audio.Device })
+			level := "OK"
+			message := fmt.Sprintf("%d outputs; %s", len(devices), formatAudioSettings(settings.Audio))
+			if !selected {
+				level, message = "WARN", message+"; selected device is disconnected and playback will use the system default"
+			}
+			r.check(level, "audio devices", message)
+		}
+	}
+	registered, registration := deepLinkRegistrationStatus()
+	if registered {
+		r.check("OK", "chill links", registration)
+	} else {
+		r.check("WARN", "chill links", "not registered; run chill link register")
+	}
+	if options.providers {
+		registry, providerErr := providers()
+		if providerErr != nil {
+			r.check("FAIL", "providers", providerErr.Error())
+		} else {
+			for _, info := range registry.list(ctx, true) {
+				level, message := "OK", strings.Join(info.Capabilities, ", ")
+				if !info.Configured {
+					level, message = "FAIL", info.Error
+				}
+				r.check(level, "provider "+info.Key, message)
+			}
+		}
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -116,7 +161,7 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 	if daemonErr != nil {
 		r.check("FAIL", "daemon", daemonErr.Error()+"; try chill --stop then chill; if no daemon is alive, a playback command replaces stale discovery data")
 	} else {
-		compatibility, message := daemonCompatibility(s, buildVersion())
+		compatibility, message := daemonCompatibility(s, buildVersion(), buildIdentity())
 		level := "OK"
 		if compatibility == "incompatible" {
 			level = "FAIL"

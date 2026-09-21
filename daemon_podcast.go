@@ -128,9 +128,12 @@ func (d *Daemon) saveEpisode(ended bool) {
 	}
 }
 
-func (d *Daemon) saveCurrentProgress(ended bool) {
+func (d *Daemon) saveCurrentProgress(ended bool, lifecycle ...string) {
 	if d.current == nil || !d.current.finite() {
 		return
+	}
+	if ended && d.current.Kind == MediaProvider {
+		d.providerCompleted = true
 	}
 	if d.episode != nil {
 		d.saveEpisode(ended)
@@ -154,6 +157,36 @@ func (d *Daemon) saveCurrentProgress(ended bool) {
 	} else {
 		d.storageError = ""
 	}
+	item := *d.current
+	state := "playing"
+	if len(lifecycle) > 0 {
+		state = lifecycle[0]
+	} else if ended {
+		state = "finished"
+	} else if d.paused || d.state == "paused" {
+		state = "paused"
+	}
+	d.syncProviderProgress(item, time.Duration(position*float64(time.Second)), time.Duration(duration*float64(time.Second)), state)
+}
+
+func (d *Daemon) syncProviderProgress(item MediaItem, position, duration time.Duration, state string) {
+	if item.Kind != MediaProvider {
+		return
+	}
+	scrobble := state == "finished" && !d.providerScrobbled
+	if scrobble {
+		d.providerScrobbled = true
+	}
+	update := providerProgressUpdate{item: item, position: position, duration: duration, state: state, completed: d.providerCompleted || state == "finished", scrobble: scrobble}
+	d.providerProgress.submit(update, func(err error) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if err != nil {
+			d.storageError = "could not synchronize provider progress: " + err.Error()
+		} else if strings.HasPrefix(d.storageError, "could not synchronize provider progress:") {
+			d.storageError = ""
+		}
+	})
 }
 
 func (d *Daemon) scheduleProgress() {
@@ -175,10 +208,6 @@ func (d *Daemon) scheduleProgress() {
 		}
 		d.scheduleProgress()
 	})
-}
-
-func (d *Daemon) finishEpisode() {
-	d.finishFiniteItem()
 }
 
 func (d *Daemon) finishFiniteItem() {
@@ -315,6 +344,8 @@ func (d *Daemon) seekEpisode(arg string) string {
 	d.saveCurrentProgress(false)
 	d.closePlayer()
 	d.generation++ // invalidate a reconnect, old frames, and progress timers
+	d.providerCompleted = false
+	d.providerScrobbled = false
 	if d.resolveCancel != nil {
 		d.resolveCancel()
 		d.resolveCancel = nil

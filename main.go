@@ -27,7 +27,9 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"strings"
+	"time"
 
+	"github.com/willibrandon/chill/internal/notify"
 	"github.com/willibrandon/chill/internal/podcast"
 )
 
@@ -113,6 +115,18 @@ func randInt(n int) int {
 }
 
 func main() {
+	if handled, err := notify.RunHelper(os.Args); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if runDeepLinkHandlerIfNeeded() {
+		return
+	}
+	// Capture the executable before a later client installation can replace its path.
+	_ = buildIdentity()
 	promoteTrailingPlaybackFlags()
 	// commands
 	daemon := flag.Bool("daemon", false, "run as daemon")
@@ -138,6 +152,12 @@ func main() {
 	eqPreset := flag.String("eq", "", "set the 10-band EQ preset")
 	shuffle := flag.Bool("shuffle", false, "shuffle queued media")
 	repeat := flag.String("repeat", "", "repeat mode: off, all, or one")
+	device := flag.String("device", "", "audio output device id or name")
+	audioProfile := flag.String("audio-profile", "", "audio profile: Automatic, Lossless, Low Latency, Stable Streaming, or Custom")
+	sampleRate := flag.Int("sample-rate", 0, "audio output sample rate")
+	bufferMS := flag.Int("buffer", 0, "audio output buffer in milliseconds")
+	resampleQuality := flag.Int("resample-quality", 0, "audio resample quality (1-4)")
+	mono := flag.Bool("mono", false, "downmix audio to mono")
 
 	flag.Usage = printCLIHelp
 	flag.Parse()
@@ -175,8 +195,41 @@ func main() {
 		}
 		return true
 	}
-	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics" && flag.Arg(0) != "queue" && flag.Arg(0) != "playlist" && flag.Arg(0) != "library") {
-		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, lyrics, queue, playlist, and library commands"))
+	applyStartupAudio := func() bool {
+		var commands [][]string
+		if *audioProfile != "" {
+			commands = append(commands, []string{"profile", *audioProfile})
+		}
+		if *sampleRate != 0 {
+			commands = append(commands, []string{"sample-rate", fmt.Sprint(*sampleRate)})
+		}
+		if *bufferMS != 0 {
+			commands = append(commands, []string{"buffer", fmt.Sprint(*bufferMS)})
+		}
+		if *resampleQuality != 0 {
+			commands = append(commands, []string{"resample-quality", fmt.Sprint(*resampleQuality)})
+		}
+		if *device != "" {
+			commands = append(commands, []string{"device", *device})
+		}
+		if *mono {
+			commands = append(commands, []string{"mono", "on"})
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for _, command := range commands {
+			if _, err := runAudioCommand(ctx, command, false); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return false
+			}
+		}
+		return true
+	}
+	if !applyStartupAudio() {
+		return
+	}
+	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics" && flag.Arg(0) != "queue" && flag.Arg(0) != "playlist" && flag.Arg(0) != "library" && flag.Arg(0) != "remote" && flag.Arg(0) != "audio" && flag.Arg(0) != "device" && flag.Arg(0) != "providers" && flag.Arg(0) != "search" && flag.Arg(0) != "browse") {
+		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, lyrics, queue, playlist, library, remote, audio, device, provider, search, and browse commands"))
 		return
 	}
 	if flag.NArg() > 0 {
@@ -241,6 +294,76 @@ func main() {
 			} else {
 				printResult("", fmt.Errorf("usage: chill status [--json]"))
 			}
+			return
+		case "remote":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runRemoteCommand(ctx, args[1:]))
+			return
+		case "audio":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runAudioCommand(ctx, args[1:], *jsonOutput))
+			return
+		case "device":
+			if helpRequested(args[1:]) {
+				printResult(deviceCommandHelp, nil)
+				return
+			}
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			deviceArgs := args[1:]
+			if len(deviceArgs) == 0 {
+				deviceArgs = []string{"list"}
+			} else if deviceArgs[0] == "set" {
+				deviceArgs = append([]string{"device"}, deviceArgs[1:]...)
+			} else if deviceArgs[0] == "default" {
+				deviceArgs = []string{"device", "auto"}
+			} else if deviceArgs[0] != "list" {
+				deviceArgs = append([]string{"device"}, deviceArgs...)
+			}
+			printResult(runAudioCommand(ctx, deviceArgs, *jsonOutput))
+			return
+		case "mono":
+			printResult(runAudioCommand(context.Background(), append([]string{"mono"}, args[1:]...), false))
+			return
+		case "providers":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runProvidersCommand(ctx, args[1:], *jsonOutput))
+			return
+		case "search":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runSearchCommand(ctx, args[1:], *jsonOutput, *fg))
+			return
+		case "browse":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runBrowseCommand(ctx, args[1:], *jsonOutput, *fg))
+			return
+		case "setup":
+			if helpRequested(args[1:]) {
+				printResult("Usage: chill setup [provider]", nil)
+				return
+			}
+			if len(args) > 2 || *jsonOutput {
+				printResult("", errors.New("usage: chill setup [provider]"))
+				return
+			}
+			provider := ""
+			if len(args) == 2 {
+				provider = args[1]
+			}
+			printResult(runProviderSetup(provider))
+			return
+		case "link":
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+			defer cancel()
+			printResult(runLinkCommand(ctx, args[1:], *fg))
+			return
+		case "completion":
+			printResult(runCompletionCommand(args[1:]))
 			return
 		case "queue":
 			queueArgs := args[1:]
@@ -376,6 +499,15 @@ func main() {
 		}
 		return
 	}
+	if flag.NArg() == 1 && isDeepLinkInput(flag.Arg(0)) {
+		if !applyStartupEqualizer() {
+			return
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		printResult(runDeepLink(ctx, flag.Arg(0), *fg))
+		return
+	}
 	if flag.NArg() > 0 && isMediaInput(flag.Arg(0)) {
 		if !applyStartupEqualizer() {
 			return
@@ -497,10 +629,13 @@ func promoteTrailingPlaybackFlags() {
 	args := os.Args[1:]
 	var promoted, rest []string
 	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-psn_") {
+			continue
+		}
 		switch args[i] {
-		case "--fg", "-fg", "--shuffle", "-shuffle":
+		case "--fg", "-fg", "--shuffle", "-shuffle", "--mono", "-mono":
 			promoted = append(promoted, args[i])
-		case "--repeat", "-repeat", "--eq", "-eq":
+		case "--repeat", "-repeat", "--eq", "-eq", "--device", "-device", "--audio-profile", "-audio-profile", "--sample-rate", "-sample-rate", "--buffer", "-buffer", "--resample-quality", "-resample-quality":
 			if i+1 < len(args) {
 				promoted = append(promoted, args[i], args[i+1])
 				i++
@@ -508,7 +643,7 @@ func promoteTrailingPlaybackFlags() {
 				rest = append(rest, args[i])
 			}
 		default:
-			if strings.HasPrefix(args[i], "--repeat=") || strings.HasPrefix(args[i], "-repeat=") || strings.HasPrefix(args[i], "--eq=") || strings.HasPrefix(args[i], "-eq=") {
+			if strings.HasPrefix(args[i], "--repeat=") || strings.HasPrefix(args[i], "-repeat=") || strings.HasPrefix(args[i], "--eq=") || strings.HasPrefix(args[i], "-eq=") || strings.HasPrefix(args[i], "--device=") || strings.HasPrefix(args[i], "-device=") || strings.HasPrefix(args[i], "--audio-profile=") || strings.HasPrefix(args[i], "-audio-profile=") || strings.HasPrefix(args[i], "--sample-rate=") || strings.HasPrefix(args[i], "-sample-rate=") || strings.HasPrefix(args[i], "--buffer=") || strings.HasPrefix(args[i], "-buffer=") || strings.HasPrefix(args[i], "--resample-quality=") || strings.HasPrefix(args[i], "-resample-quality=") {
 				promoted = append(promoted, args[i])
 			} else {
 				rest = append(rest, args[i])

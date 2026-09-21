@@ -48,6 +48,7 @@ type episodeDownload struct {
 
 // Only the daemon writes this file. REPLs may read it while the daemon is off.
 type podcastLibrary struct {
+	change uint64 `json:"-"` // change invalidates in-process remote snapshots.
 	// Speed is the preferred podcast playback rate, from 0.5 to 3.
 	Speed float64 `json:"speed"`
 	// Version identifies the persistent file format.
@@ -80,7 +81,7 @@ func podcastPath() string {
 }
 
 func loadPodcastLibrary() (*podcastLibrary, error) {
-	l := &podcastLibrary{Version: 1, Country: "us", Speed: 1, Subscriptions: []podcast.Show{}, Progress: map[string]episodeProgress{},
+	l := &podcastLibrary{change: 1, Version: 1, Country: "us", Speed: 1, Subscriptions: []podcast.Show{}, Progress: map[string]episodeProgress{},
 		DownloadSettings: downloadPreferences{Latest: 1, Concurrency: 2, MaxBytes: 10 << 30, RetainPlayedDays: 30}, Downloads: map[string]episodeDownload{}, Inbox: []podcast.Episode{}}
 	data, err := os.ReadFile(podcastPath())
 	if os.IsNotExist(err) {
@@ -159,6 +160,7 @@ func (l *podcastLibrary) commit(next podcastLibrary) error {
 	if err := writeJSON(podcastPath(), next); err != nil {
 		return err
 	}
+	next.change = l.change + 1
 	*l = next
 	return nil
 }

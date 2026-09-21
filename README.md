@@ -65,39 +65,50 @@ Use `chill update` for Go installs and release binaries,
 ## Usage
 
 ```bash
-chill                         # open the interactive REPL
-chill chillhop                # play a station
-chill song.flac               # play a local track
-chill ~/Music                 # recursively play a folder
-chill album.m3u --fg          # play a playlist in the foreground
-chill open                    # browse files, queues, and playlists
-chill queue next song.flac    # put a track next
-chill queue move 4 1          # reorder pending media
-chill playlist save commute   # save the current queue
-chill playlist import mix.pls # import M3U, M3U8, or PLS
-chill library favorites       # list favorite media
-chill podcasts                # browse podcasts and the listening inbox
-chill podcasts sync           # refresh subscriptions and automatic downloads
-chill podcasts downloads      # show offline download progress
-chill radio                   # browse internet radio
-chill radio search jazz       # search stations
-chill history                 # recently heard live tracks
-chill lyrics                  # lyrics for the current track
-chill notifications on        # opt in to track-change notifications
-chill seek -30                # jump back 30 seconds
-chill speed 1.5               # finite-media playback speed
-chill shuffle on              # shuffle the universal queue
-chill repeat all              # repeat the complete playback cycle
-chill --toggle                # pause/resume, or play the default station when stopped
-chill --vol 60                # set volume (also +5, -10, up, down)
-chill eq Rock                 # select an equalizer preset
-chill eq --band 1k +3         # edit one band and switch to Custom
-chill --status --json         # show status and queue state as JSON
-chill doctor                  # check dependencies, runtime, and daemon versions
-chill --sleep 45m             # stop playback after 45 minutes
-chill --stop                  # stop playback
-chill --help                  # show help
-chill update                  # install the latest release
+chill                             # open the interactive REPL
+chill chillhop                    # play a station
+chill song.flac                   # play a local track
+chill ~/Music                     # recursively play a folder
+chill album.m3u --fg              # play a playlist in the foreground
+chill open                        # browse files, queues, and playlists
+chill queue next song.flac        # put a track next
+chill queue move 4 1              # reorder pending media
+chill playlist save commute       # save the current queue
+chill playlist import mix.pls     # import M3U, M3U8, or PLS
+chill library favorites           # list favorite media
+chill search ambient              # search every enabled provider
+chill browse navidrome albums     # browse a provider catalog
+chill providers --check           # validate provider connections
+chill setup navidrome             # configure a provider securely
+chill podcasts                    # browse podcasts and the listening inbox
+chill podcasts sync               # refresh subscriptions and automatic downloads
+chill podcasts downloads          # show offline download progress
+chill radio                       # browse internet radio
+chill radio search jazz           # search stations
+chill history                     # recently heard live tracks
+chill lyrics                      # lyrics for the current track
+chill notifications on            # opt in to track-change notifications
+chill seek -30                    # jump back 30 seconds
+chill speed 1.5                   # finite-media playback speed
+chill shuffle on                  # shuffle the universal queue
+chill repeat all                  # repeat the complete playback cycle
+chill device list                 # list audio output devices
+chill audio profile Lossless      # select an audio quality profile
+chill --device auto --fg          # use default audio output in foreground mode
+chill remote state                # read the complete runtime snapshot
+chill remote events runtime.queue # stream revisioned queue events
+chill link register               # register secure chill:// links
+chill completion zsh              # generate shell completion
+chill --toggle                    # pause/resume, or play the default station when stopped
+chill --vol 60                    # set volume (also +5, -10, up, down)
+chill eq Rock                     # select an equalizer preset
+chill eq --band 1k +3             # edit one band and switch to Custom
+chill --status --json             # show status and queue state as JSON
+chill doctor                      # check dependencies, runtime, and daemon versions
+chill --sleep 45m                 # stop playback after 45 minutes
+chill --stop                      # stop playback
+chill --help                      # show help
+chill update                      # install the latest release
 ```
 
 ## Architecture
@@ -112,16 +123,16 @@ yt-dlp resolves → FFmpeg decodes → 10-band EQ → daemon PCM pipe → mpv au
                                            │
                                       FFT / stereo levels
                                            │
-CLI/REPL ←── control IPC ──→ daemon ───── snapshots ──→ REPL visualizer
-                               ↑
-             durable universal queue, playlists, and podcast downloads
+CLI/REPL ←── versioned JSON IPC ──→ daemon ── events/jobs ──→ scripts and clients
+                                      ↑
+                    providers, audio devices, durable library state
 ```
 
 After an update, the next control command restarts an older daemon and restores
 your playback settings. Volume, the active EQ preset, your Custom curve, and the
 notification preference are saved between sessions.
 
-The daemon decodes one source into 48 kHz stereo PCM. Local albums preload the
+The daemon decodes each source into configurable stereo float PCM. Local albums preload the
 next decoder and keep the PCM output open across track boundaries. Visualizers analyze the
 post-EQ samples sent to playback; they do not open another network stream or
 capture system audio. FFT work runs only while a REPL is subscribed. `doctor`
@@ -209,6 +220,8 @@ Quitting also cancels diagnostics; music keeps playing.
 | `F5` | open radio discovery or return to the prompt |
 | `F6` | show lyrics for the current track or return to the prompt |
 | `F7` | browse the universal queue, saved playlists, local files, favorites, bookmarks, and recent media |
+| `F8` | browse and search providers or return to the prompt |
+| `F9` | configure audio profiles and output devices or return to the prompt |
 | `Ctrl+Q` | quit, music keeps playing |
 
 ### Equalizer
@@ -305,6 +318,49 @@ tracks use gapless decoder preloading.
 Press **F7** or run `chill open` for the full-screen browser. See [Library,
 queues, and playlists](docs/library.md) for every command, key, format, and
 saved-data rule.
+
+### Providers and global search
+
+Press **F8** to browse every enabled catalog, search them concurrently, and
+play, queue, favorite, or bookmark results without leaving the TUI. YouTube,
+YouTube Music, SoundCloud, and Mixcloud work through yt-dlp. Account-backed
+providers include Navidrome/Subsonic, Plex, Jellyfin, Emby, Audiobookshelf,
+Spotify, Tidal, and Qobuz. The hosted catalogs expose explicit previews when
+their APIs supply one; they are labeled separately from full-track playback.
+
+Run `chill setup` for the protected connection form. Public settings and
+owner-readable credentials are stored separately. `chill providers --check`
+validates all enabled connections, while `chill search` and `chill browse`
+offer text and JSON output plus play, queue, play-next, and foreground actions.
+
+See [Providers and search](docs/providers.md) for setup, commands, TUI keys,
+identity rules, and saved-data behavior.
+
+### Audio output
+
+Press **F9** or run `chill audio` to choose Automatic, Lossless, Low Latency,
+or Stable Streaming, switch output devices live, or tune sample rate, buffer,
+resampling, mono downmix, channel layout, and exclusive mode. The selection is
+remembered. A disconnected device falls back to the system default and is
+selected again when it returns.
+
+See [Audio output](docs/audio.md) for profiles, commands, status fields, and
+platform behavior.
+
+### Remote control and automation
+
+`chill remote` exposes versioned JSON requests, stable errors, complete state,
+asynchronous jobs, cancellation, queue conflict detection, and bounded event
+streams. Unix uses an owner-only socket; Windows uses an owner-only named pipe.
+The same API drives playback, queues, playlists, providers, podcast downloads,
+and audio settings.
+
+Secure `chill://play` and `chill://queue` links can target direct URLs,
+provider items, searches, albums, and playlists. Generate native Bash, Zsh,
+Fish, or PowerShell completions with `chill completion <shell>`.
+
+See [Remote control](docs/remote-control.md) for the envelope, operations,
+events, deep-link grammar, and completion setup.
 
 ### Visualizers
 

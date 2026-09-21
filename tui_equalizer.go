@@ -28,6 +28,8 @@ type equalizerResultMsg struct {
 }
 
 func (t *tui) openEqualizer() {
+	t.closeProviders()
+	t.closeAudio()
 	// An in-flight save owns the newest curve even if disk and the next status
 	// poll still describe the prior one. Reopening must not roll it back.
 	if t.eq.sending {

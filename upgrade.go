@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +22,9 @@ func lockDaemon() (func(), error) {
 }
 
 func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -43,19 +47,35 @@ func lockFile(path string) (func(), error) {
 	}
 }
 
-func daemonNeedsUpgrade(s Status, clientVersion string) (bool, error) {
+func daemonNeedsUpgrade(s Status, clientVersion, clientBuildID string) (bool, error) {
 	if s.Protocol > daemonProtocol {
 		return false, fmt.Errorf("daemon %s requires a newer chill client", s.Version)
 	}
 	if s.Protocol < daemonProtocol || s.Version == "" {
 		return true, nil // releases before the version handshake
 	}
-	// Never downgrade a newer daemon, or replace a matching development build
-	// on every REPL status poll.
-	if !semver.IsValid(clientVersion) {
+	clientValid, daemonValid := semver.IsValid(clientVersion), semver.IsValid(s.Version)
+	if clientValid && daemonValid {
+		switch semver.Compare(s.Version, clientVersion) {
+		case 1:
+			return false, nil
+		case -1:
+			return true, nil
+		}
+		clientDevelopment := strings.Contains(clientVersion, "+dirty")
+		daemonDevelopment := strings.Contains(s.Version, "+dirty")
+		if !clientDevelopment {
+			return daemonDevelopment, nil
+		}
+		return clientBuildID != "" && s.BuildID != clientBuildID, nil
+	}
+	if clientValid {
+		return true, nil
+	}
+	if daemonValid {
 		return false, nil
 	}
-	return !semver.IsValid(s.Version) || semver.Compare(s.Version, clientVersion) < 0, nil
+	return clientBuildID != "" && s.BuildID != clientBuildID, nil
 }
 
 type playbackSnapshot struct {
@@ -137,7 +157,7 @@ func upgradeDaemon() error {
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		return fmt.Errorf("reading daemon version: %w", err)
 	}
-	upgrade, err := daemonNeedsUpgrade(s, buildVersion())
+	upgrade, err := daemonNeedsUpgrade(s, buildVersion(), buildIdentity())
 	if err != nil || !upgrade {
 		return err
 	}

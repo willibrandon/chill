@@ -17,6 +17,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// RunHelper is unused on Windows, where notifications use WinRT directly.
+func RunHelper(_ []string) (bool, error) { return false, nil }
+
 const (
 	toastAUMID              = "willibrandon.chill"
 	toastTag                = "now-playing"

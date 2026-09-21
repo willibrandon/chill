@@ -48,6 +48,32 @@ func TestUniversalQueuePersistencePriorityAndUndo(t *testing.T) {
 	}
 }
 
+// TestDirectQueueCommitsAdvanceOnlyForStateChanges checks foreground writes
+// preserve optimistic-concurrency semantics without inflating revisions.
+func TestDirectQueueCommitsAdvanceOnlyForStateChanges(t *testing.T) {
+	withConfigDir(t)
+	library := emptyLibrary()
+	previous := library.queueFingerprint()
+	library.Queue = []MediaItem{testTrack(filepath.Join(t.TempDir(), "one.flac"), "One")}
+	if err := library.commitQueue(previous); err != nil {
+		t.Fatal(err)
+	}
+	if library.QueueRevision != 2 {
+		t.Fatalf("queue revision = %d, want 2", library.QueueRevision)
+	}
+	previous = library.queueFingerprint()
+	if err := library.commitQueue(previous); err != nil {
+		t.Fatal(err)
+	}
+	if library.QueueRevision != 2 {
+		t.Fatalf("unchanged queue revision = %d, want 2", library.QueueRevision)
+	}
+	reloaded, err := loadLibrary()
+	if err != nil || reloaded.QueueRevision != 2 {
+		t.Fatalf("persisted revision = %d, err = %v", reloaded.QueueRevision, err)
+	}
+}
+
 // TestPlaylistImportOrderAndRoundTrip checks mixed input order and PLS output.
 func TestPlaylistImportOrderAndRoundTrip(t *testing.T) {
 	withConfigDir(t)

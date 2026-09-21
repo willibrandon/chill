@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/willibrandon/chill/internal/podcast"
@@ -488,30 +490,40 @@ func (d *Daemon) currentDownloadKey() string {
 }
 
 func (d *Daemon) syncPodcastInbox() {
+	_ = d.syncPodcastInboxContext(context.Background(), nil)
+}
+
+func (d *Daemon) syncPodcastInboxContext(ctx context.Context, progress func(float64, string)) error {
 	d.mu.Lock()
 	library, err := d.podcastLibrary()
 	if err != nil {
 		d.mu.Unlock()
-		return
+		return err
 	}
 	subscriptions := append([]podcast.Show(nil), library.Subscriptions...)
 	settings := library.DownloadSettings
 	d.mu.Unlock()
 	client := podcast.NewClient()
 	sem := make(chan struct{}, max(1, settings.Concurrency))
-	var syncErrors int
+	var syncErrors atomic.Int64
+	var completed atomic.Int64
+	var wait sync.WaitGroup
 	for _, show := range subscriptions {
 		show := show
-		sem <- struct{}{}
-		go func() {
+		wait.Go(func() {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			feedCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 			defer cancel()
-			feed, err := client.Feed(ctx, show.FeedURL)
+			feed, err := client.Feed(feedCtx, show.FeedURL)
 			if err != nil {
-				d.mu.Lock()
-				syncErrors++
-				d.mu.Unlock()
+				if ctx.Err() == nil {
+					syncErrors.Add(1)
+				}
 				return
 			}
 			sort.SliceStable(feed.Episodes, func(i, j int) bool { return feed.Episodes[i].Published.After(feed.Episodes[j].Published) })
@@ -549,20 +561,26 @@ func (d *Daemon) syncPodcastInbox() {
 			}
 			_ = d.podcasts.commit(*d.podcasts)
 			d.scheduleDownloadsLocked()
-		}()
+			finished := completed.Add(1)
+			if progress != nil && len(subscriptions) > 0 {
+				progress(float64(finished)/float64(len(subscriptions)), "refreshed "+show.Title)
+			}
+		})
 	}
-	for range cap(sem) {
-		sem <- struct{}{}
-	}
+	wait.Wait()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.podcasts != nil {
 		d.podcasts.Syncing = false
 		d.podcasts.LastSync = time.Now().UTC()
 		d.podcasts.SyncError = ""
-		if syncErrors > 0 {
-			d.podcasts.SyncError = fmt.Sprintf("%d subscription feed(s) could not be refreshed", syncErrors)
+		if failures := syncErrors.Load(); failures > 0 {
+			d.podcasts.SyncError = fmt.Sprintf("%d subscription feed(s) could not be refreshed", failures)
+		}
+		if ctx.Err() != nil {
+			d.podcasts.SyncError = "podcast sync canceled"
 		}
 		_ = d.podcasts.commit(*d.podcasts)
 	}
+	return ctx.Err()
 }

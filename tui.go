@@ -29,7 +29,7 @@ const (
 	minPaletteLines = 8    // terminal height below which suggestions are hidden
 	maxTranscript   = 1000 // lines kept in the transcript
 
-	banner = "chill  type a station, path, or command · F2 visualizer · F3 podcasts · F4 equalizer · F5 radio · F6 lyrics · F7 library · F1 help"
+	banner = "chill  type a station, path, or command · F2 visualizer · F3 podcasts · F4 equalizer · F5 radio · F6 lyrics · F7 library · F8 providers · F9 audio · F1 help"
 )
 
 var (
@@ -111,6 +111,8 @@ type tui struct {
 	lyrics       replLyrics
 	libraryUI    libraryBrowser
 	libraryStart bool
+	providersUI  providerBrowser
+	audioUI      audioBrowser
 }
 
 func newTUI() *tui {
@@ -203,6 +205,29 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			return tea.Batch(cmd, t.loadLibraryPage())
 		}
 		return cmd
+	case providerResultMsg:
+		return t.providerResult(msg)
+	case audioResultMsg:
+		return t.audioResult(msg)
+	case providerSetupValidation:
+		if t.providersUI.open && t.providersUI.setup != nil {
+			updated, command := t.providersUI.setup.Update(msg)
+			setup := updated.(providerSetupModel)
+			t.providersUI.setup = &setup
+			if setup.done {
+				if setup.saved {
+					t.providersUI.note = setup.provider + " settings saved"
+					if registry, err := providers(); err == nil {
+						t.providersUI.infos = registry.list(context.Background(), false)
+					}
+				} else {
+					t.providersUI.note = "Provider setup canceled"
+				}
+				t.providersUI.setup = nil
+			}
+			return command
+		}
+		return nil
 	case visualizerConnectedMsg, visualizerFrameMsg, visualizerRetryMsg:
 		return t.visualizerMessage(msg)
 	case equalizerResultMsg:
@@ -230,6 +255,11 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case spinner.TickMsg:
+		if t.providersUI.open && t.providersUI.loading && msg.ID == t.providersUI.spinner.ID() {
+			var cmd tea.Cmd
+			t.providersUI.spinner, cmd = t.providersUI.spinner.Update(msg)
+			return cmd
+		}
 		if !t.running {
 			return nil
 		}
@@ -319,6 +349,26 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return refreshStatus
 
 	case tea.MouseWheelMsg:
+		if t.audioUI.open {
+			browser := &t.audioUI
+			if msg.Button == tea.MouseWheelUp {
+				browser.selected = max(0, browser.selected-3)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				browser.selected = min(max(0, len(browser.rows())-1), browser.selected+3)
+			}
+			return nil
+		}
+		if t.providersUI.open {
+			browser := &t.providersUI
+			if msg.Button == tea.MouseWheelUp {
+				browser.selected = max(0, browser.selected-3)
+			}
+			if msg.Button == tea.MouseWheelDown {
+				browser.selected = min(max(0, len(browser.rows())-1), browser.selected+3)
+			}
+			return nil
+		}
 		if t.libraryUI.open {
 			b := &t.libraryUI
 			if msg.Button == tea.MouseWheelUp {
@@ -373,7 +423,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		if t.help || t.viz.focused || t.eq.open || t.podcasts.open || t.radio.open || t.lyrics.open || t.libraryUI.open {
+		if t.help || t.viz.focused || t.eq.open || t.podcasts.open || t.radio.open || t.lyrics.open || t.libraryUI.open || t.providersUI.open || t.audioUI.open {
 			return nil
 		}
 		return t.mouse(msg.(tea.MouseMsg))
@@ -386,6 +436,18 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			return t.openLibrary()
+		case "f8":
+			if t.providersUI.open {
+				t.closeProviders()
+				return nil
+			}
+			return t.openProviders()
+		case "f9":
+			if t.audioUI.open {
+				t.closeAudio()
+				return nil
+			}
+			return t.openAudio()
 		case "f5":
 			if t.radio.open {
 				t.closeRadio()
@@ -411,6 +473,12 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		}
 		if t.lyrics.open {
 			return t.lyricsKey(msg)
+		}
+		if t.audioUI.open {
+			return t.audioKey(msg)
+		}
+		if t.providersUI.open {
+			return t.providerKey(msg)
 		}
 		if t.libraryUI.open {
 			return t.libraryKey(msg)
@@ -449,6 +517,10 @@ func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	open := t.paletteOpen()
 
 	switch msg.String() {
+	case "f9":
+		return t.openAudio()
+	case "f8":
+		return t.openProviders()
 	case "f7":
 		return t.openLibrary()
 	case "f6":
@@ -920,6 +992,12 @@ func (t *tui) fit() {
 
 // View renders the active REPL, help, podcast, or visualizer screen.
 func (t *tui) View() tea.View {
+	if t.audioUI.open {
+		return t.audioView()
+	}
+	if t.providersUI.open {
+		return t.providerView()
+	}
 	if t.libraryUI.open {
 		return t.libraryView()
 	}
@@ -1060,8 +1138,12 @@ func (t *tui) statusBar() string {
 		facts = append([]string{t.spinner.View() + " " + action + t.active + "..."}, facts...)
 	}
 
-	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F5 radio", "F6 lyrics", "F7 library", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
+	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F5 radio", "F6 lyrics", "F7 library", "F8 providers", "F9 audio", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
 	switch {
+	case t.audioUI.open:
+		hints = []string{"F9 prompt", "Ctrl+Q quit"}
+	case t.providersUI.open:
+		hints = []string{"F8 prompt", "Ctrl+Q quit"}
 	case t.libraryUI.open:
 		hints = []string{"F7 prompt", "Ctrl+Q quit"}
 	case t.lyrics.open:
@@ -1116,6 +1198,8 @@ func helpBody() string {
 		{"F5", "open radio discovery or return to the prompt"},
 		{"F6", "show lyrics for the current track"},
 		{"F7", "open the queue, playlists, history, and local files"},
+		{"F8", "search and browse connected music providers"},
+		{"F9", "change audio devices and quality profiles"},
 		{"v / V", "next visualizer / fullscreen while visualizer is focused"},
 		{"Tab", "complete with the highlighted suggestion"},
 		{"→", "take the ghost text"},

@@ -49,6 +49,15 @@ type Buffer struct {
 	pos, count int
 	sequence   uint64
 	at         time.Time
+	sampleRate int
+}
+
+// NewBuffer constructs an analysis buffer for the PCM sample rate.
+func NewBuffer(sampleRate int) Buffer {
+	if sampleRate <= 0 {
+		sampleRate = SampleRate
+	}
+	return Buffer{sampleRate: sampleRate}
 }
 
 // Push accepts complete stereo f32le frames. The decoder pump handles framing.
@@ -87,7 +96,11 @@ func (b *Buffer) Snapshot() Frame {
 			ordered[ch][WindowSize-count+i] = samples[ch][(pos-count+i+WindowSize)%WindowSize]
 		}
 	}
-	f := Analyze(ordered)
+	sampleRate := b.sampleRate
+	if sampleRate <= 0 {
+		sampleRate = SampleRate
+	}
+	f := AnalyzeAt(ordered, sampleRate)
 	f.Sequence, f.At = sequence, at
 	b.cached, b.analyzedAt = f, time.Now()
 	return f
@@ -96,6 +109,14 @@ func (b *Buffer) Snapshot() Frame {
 // Analyze uses a Hann window and combines stereo power after the FFT, so
 // opposite-phase channels cannot cancel each other out in the spectrum.
 func Analyze(samples [2][WindowSize]float64) Frame {
+	return AnalyzeAt(samples, SampleRate)
+}
+
+// AnalyzeAt computes one analysis frame for a specific PCM sample rate.
+func AnalyzeAt(samples [2][WindowSize]float64, sampleRate int) Frame {
+	if sampleRate <= 0 {
+		sampleRate = SampleRate
+	}
 	var f Frame
 	var power [WindowSize/2 + 1]float64
 	for ch := range 2 {
@@ -118,8 +139,8 @@ func Analyze(samples [2][WindowSize]float64) Frame {
 	for band := range Bands {
 		lo := 30 * math.Pow(20000.0/30, float64(band)/Bands)
 		hi := 30 * math.Pow(20000.0/30, float64(band+1)/Bands)
-		first := max(1, int(math.Round(lo*WindowSize/SampleRate)))
-		last := min(len(power)-1, max(first, int(math.Round(hi*WindowSize/SampleRate))-1))
+		first := max(1, int(math.Round(lo*WindowSize/float64(sampleRate))))
+		last := min(len(power)-1, max(first, int(math.Round(hi*WindowSize/float64(sampleRate)))-1))
 		for i := first; i <= last; i++ {
 			f.Spectrum[band] = max(f.Spectrum[band], math.Sqrt(power[i]))
 		}

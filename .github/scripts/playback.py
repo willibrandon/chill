@@ -94,6 +94,9 @@ def main():
                                "default <name>", "upgrade", "--status --json", "--stations")),
                 (("-h",), ("Commands:", "doctor", "--status --json")),
                 (("doctor", "--help"), ("chill doctor [options]", "--stations", "--stream", "--timeout", "--logs")),
+                (("remote", "--help"), ("chill remote <command>", "capabilities", "events", "cancel")),
+                (("audio", "--help"), ("chill audio [setting", "sample-rate", "exclusive")),
+                (("device", "--help"), ("chill device [list", "default")),
             ]:
                 help_result = subprocess.run([str(binary), *arguments], env=dict(env, PATH=""),
                                              capture_output=True, text=True, timeout=15)
@@ -105,9 +108,14 @@ def main():
                     f"Unexpected status before startup: {stopped}")
             doctor = run("doctor")
             require("no daemon running" in doctor, "Doctor did not report the stopped daemon")
+            remote_stopped = json.loads(run("remote", "state"))
+            require(remote_stopped["snapshot"]["playback"]["state"] == "stopped",
+                    f"Offline remote state was not available: {remote_stopped}")
             # A nonempty directory blocks both Unix sockets and the Windows
-            # discovery file, forcing a real child-daemon startup failure.
-            blocked = root / ("chill.port" if os.name == "nt" else f"chill-{os.getuid()}.sock")
+            # named-pipe marker, forcing a real child-daemon startup failure.
+            blocked = (root / "config" / "chill" / "daemon.pipe" if os.name == "nt"
+                       else root / f"chill-{os.getuid()}" / "daemon.sock")
+            blocked.parent.mkdir(parents=True, exist_ok=True)
             blocked.mkdir()
             (blocked / "blocker").write_text("test", encoding="utf-8")
             try:
@@ -122,6 +130,20 @@ def main():
                         f"Stale IPC was not reported as JSON: {stale.stdout}")
             finally:
                 shutil.rmtree(blocked)
+            capabilities = json.loads(run("remote", "capabilities"))
+            require(capabilities["ok"] and len(capabilities["capabilities"]) >= 40
+                    and "runtime.settings" in capabilities["topics"],
+                    f"Remote capability discovery failed: {capabilities}")
+            job = json.loads(run("remote", "call", "settings.audio", "--params",
+                                 '{"profile":"Low Latency"}', "--wait"))
+            require(job["job"]["state"] == "succeeded", f"Remote audio job failed: {job}")
+            snapshot = json.loads(run("remote", "state"))["snapshot"]
+            require(snapshot["playback"]["audio"]["profile"] == "Low Latency",
+                    f"Remote snapshot lost audio settings: {snapshot}")
+            run("remote", "call", "settings.audio", "--params",
+                '{"profile":"Automatic"}', "--wait")
+            run("--stop")
+            wait_for("not running")
             run("add", "ci-audio", args.youtube or str(audio), "CI playback")
             run("default", "ci-audio")
             if args.legacy_bin_dir:

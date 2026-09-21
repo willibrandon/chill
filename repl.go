@@ -27,17 +27,27 @@ var replCommands = []replCommand{
 	{"queue", "[command]", "show or edit the universal queue"},
 	{"playlist", "[command]", "manage saved playlists"},
 	{"library", "[recent|favorites|bookmarks]", "browse listening collections"},
+	{"search", "<words>", "search every enabled music provider"},
+	{"browse", "<provider>", "browse a provider catalog"},
+	{"providers", "[--check]", "list provider capabilities and connections"},
+	{"setup", "[provider]", "configure a provider securely"},
+	{"link", "[open|register|unregister|status]", "use secure chill:// links"},
+	{"completion", "<shell>", "generate shell completion definitions"},
 	{"shuffle", "[on|off|toggle]", "control queue shuffle"},
 	{"repeat", "[off|all|one|cycle]", "control queue repeat"},
 	{"favorite", "", "favorite or unfavorite the current item"},
 	{"bookmark", "", "bookmark or unbookmark the current item"},
 	{"vol", "[level]", "set volume (0-100, +5, -10, up, down)"},
+	{"audio", "[setting]", "show or change audio output settings"},
+	{"device", "[list|set|default]", "list or switch audio output devices"},
+	{"mono", "[on|off|toggle]", "control mono downmix"},
 	{"mute", "", "toggle mute"},
 	{"skip", "", "skip to random station"},
 	{"pause", "", "pause playback"},
 	{"resume", "", "resume playback"},
 	{"toggle", "", "toggle play/pause"},
 	{"status", "", "show current status"},
+	{"remote", "[state|capabilities|call|events|job|cancel]", "use the versioned automation API"},
 	{"eq", "[preset|--band N dB|list]", "show or edit the 10-band equalizer (F4)"},
 	{"viz", "[mode|off|list]", "show or select a REPL visualizer (F2 to focus)"},
 	{"podcasts", "[command|feed-url]", "browse podcasts (F3; --help for commands)"},
@@ -178,6 +188,22 @@ func suggest(input string) []suggestion {
 		}
 		candidates = []suggestion{{text: "on", desc: "show track changes"}, {text: "off", desc: "hide track changes"}}
 
+	case strings.EqualFold(words[0], "audio") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
+		}
+		candidates = append(candidates, []suggestion{
+			{text: "profile", desc: "select a quality profile", takes: true},
+			{text: "device", desc: "select an output device", takes: true},
+			{text: "sample-rate", desc: "set PCM sample rate", takes: true},
+			{text: "buffer", desc: "set output buffer milliseconds", takes: true},
+			{text: "resample-quality", desc: "set resampling quality", takes: true},
+			{text: "mono", desc: "control mono downmix", takes: true},
+			{text: "channels", desc: "select mono or stereo", takes: true},
+			{text: "exclusive", desc: "control exclusive device access", takes: true},
+			{text: "list", desc: "list output devices"},
+		}...)
+
 	case strings.EqualFold(words[0], "eq"):
 		arg := strings.TrimSpace(input[len(words[0]):])
 		bandFields := strings.Fields(arg)
@@ -230,30 +256,39 @@ func suggest(input string) []suggestion {
 		if len(words) == 2 {
 			prefix = words[1]
 		}
-		for _, item := range []suggestion{
+		candidates = append(candidates, []suggestion{
 			{text: "top", desc: "most-voted stations"}, {text: "popular", desc: "most-listened stations"},
 			{text: "trending", desc: "stations gaining listeners"}, {text: "random", desc: "random stations"},
 			{text: "search", desc: "search station names", takes: true}, {text: "country", desc: "browse a country", takes: true},
 			{text: "tag", desc: "browse a genre or tag", takes: true}, {text: "countries", desc: "list countries"},
 			{text: "tags", desc: "list genres and tags"}, {text: "favorites", desc: "favorite stations"},
 			{text: "nearby", desc: "local country suggestions", takes: true}, {text: "--help", desc: "radio command help"},
-		} {
-			candidates = append(candidates, item)
+		}...)
+
+	case strings.EqualFold(words[0], "remote") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
+		if len(words) == 2 {
+			prefix = words[1]
 		}
+		candidates = append(candidates, []suggestion{
+			{text: "state", desc: "runtime snapshot"},
+			{text: "capabilities", desc: "available operations"},
+			{text: "call", desc: "submit an operation", takes: true},
+			{text: "events", desc: "stream event topics", takes: true},
+			{text: "job", desc: "read a job", takes: true},
+			{text: "cancel", desc: "cancel a job", takes: true},
+		}...)
 
 	case strings.EqualFold(words[0], "queue") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
 		if len(words) == 2 {
 			prefix = words[1]
 		}
-		for _, item := range []suggestion{
+		candidates = append(candidates, []suggestion{
 			{text: "list", desc: "show pending items"}, {text: "add", desc: "append files, folders, playlists, or URLs", takes: true},
 			{text: "next", desc: "add to play-next", takes: true}, {text: "replace", desc: "replace pending items", takes: true},
 			{text: "play", desc: "play a numbered item", takes: true}, {text: "remove", desc: "remove a numbered item", takes: true},
 			{text: "move", desc: "reorder two positions", takes: true}, {text: "search", desc: "filter pending items", takes: true},
 			{text: "undo", desc: "undo the last queue edit"}, {text: "clear", desc: "clear pending items"},
-		} {
-			candidates = append(candidates, item)
-		}
+		}...)
 
 	case strings.EqualFold(words[0], "playlist") && (len(words) == 1 || len(words) == 2 && !typingNewWord):
 		if len(words) == 2 {
@@ -421,6 +456,26 @@ func execute(input string) (string, error) {
 		return runPlaylistCommand(context.Background(), parts[1:])
 	case "library":
 		return runLibraryCommand(parts[1:])
+	case "search":
+		return runSearchCommand(context.Background(), parts[1:], false, false)
+	case "browse":
+		return runBrowseCommand(context.Background(), parts[1:], false, false)
+	case "providers":
+		return runProvidersCommand(context.Background(), parts[1:], false)
+	case "setup":
+		if helpRequested(parts[1:]) {
+			return "Usage: chill setup [provider]", nil
+		}
+		return "", fmt.Errorf("provider setup uses a protected terminal form: run chill setup%s", func() string {
+			if arg != "" {
+				return " " + arg
+			}
+			return ""
+		}())
+	case "link":
+		return runLinkCommand(context.Background(), parts[1:], false)
+	case "completion":
+		return runCompletionCommand(parts[1:])
 	case "shuffle", "repeat":
 		if err := ensureDaemon(); err != nil {
 			return "", err
@@ -460,6 +515,28 @@ func execute(input string) (string, error) {
 	case "vol", "volume":
 		out, err = clientVolume(arg)
 
+	case "audio":
+		return runAudioCommand(context.Background(), parts[1:], false)
+
+	case "device":
+		if helpRequested(parts[1:]) {
+			return deviceCommandHelp, nil
+		}
+		deviceArgs := parts[1:]
+		if len(deviceArgs) == 0 {
+			deviceArgs = []string{"list"}
+		} else if deviceArgs[0] == "set" {
+			deviceArgs = append([]string{"device"}, deviceArgs[1:]...)
+		} else if deviceArgs[0] == "default" {
+			deviceArgs = []string{"device", "auto"}
+		} else if deviceArgs[0] != "list" {
+			deviceArgs = append([]string{"device"}, deviceArgs...)
+		}
+		return runAudioCommand(context.Background(), deviceArgs, false)
+
+	case "mono":
+		return runAudioCommand(context.Background(), append([]string{"mono"}, parts[1:]...), false)
+
 	case "mute":
 		out, err = clientMute()
 
@@ -477,6 +554,12 @@ func execute(input string) (string, error) {
 
 	case "status":
 		out, err = clientStatus()
+
+	case "remote":
+		if len(parts) > 1 && strings.EqualFold(parts[1], "events") {
+			return "", fmt.Errorf("event streams run in a terminal: chill remote events <topic...>")
+		}
+		return runRemoteCommand(context.Background(), parts[1:])
 
 	case "eq":
 		out, err = clientEqualizer(arg)

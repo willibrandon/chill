@@ -15,6 +15,10 @@ import (
 	"github.com/godbus/dbus/v5/prop"
 )
 
+func cleanVolume(volume float64) float64 {
+	return min(1, max(0, volume))
+}
+
 const mediaPath = dbus.ObjectPath("/org/mpris/MediaPlayer2")
 
 const introspection = `<node>

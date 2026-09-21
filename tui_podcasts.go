@@ -44,6 +44,8 @@ type podcastResultMsg struct {
 }
 
 func (t *tui) openPodcasts(query string) tea.Cmd {
+	t.closeProviders()
+	t.closeAudio()
 	p := &t.podcasts
 	p.open = true
 	t.viz.focused, t.viz.fullscreen = false, false

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,22 +14,25 @@ import (
 // TestDoctorCompatibility checks client and daemon version descriptions.
 func TestDoctorCompatibility(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		status *Status
-		client string
-		want   string
+		name          string
+		status        *Status
+		clientVersion string
+		clientBuildID string
+		want          string
 	}{
-		{"stopped", nil, "v0.6.0", "not-running"},
-		{"legacy", &Status{}, "v0.6.0", "daemon-outdated"},
-		{"older", &Status{Version: "v0.5.0", Protocol: daemonProtocol}, "v0.6.0", "daemon-outdated"},
-		{"same", &Status{Version: "v0.6.0", Protocol: daemonProtocol}, "v0.6.0", "current"},
-		{"newer", &Status{Version: "v0.7.0", Protocol: daemonProtocol}, "v0.6.0", "client-outdated"},
-		{"protocol", &Status{Version: "v0.7.0", Protocol: daemonProtocol + 1}, "v0.6.0", "incompatible"},
-		{"dev", &Status{Version: "dev", Protocol: daemonProtocol}, "dev", "unverifiable"},
-		{"dirty", &Status{Version: "v0.6.0+dirty", Protocol: daemonProtocol}, "v0.6.0+dirty", "unverifiable"},
+		{"stopped", nil, "v0.6.0", "release", "not-running"},
+		{"legacy", &Status{}, "v0.6.0", "release", "daemon-outdated"},
+		{"older", &Status{Version: "v0.5.0", Protocol: daemonProtocol}, "v0.6.0", "release", "daemon-outdated"},
+		{"same", &Status{Version: "v0.6.0", Protocol: daemonProtocol}, "v0.6.0", "release", "current"},
+		{"newer", &Status{Version: "v0.7.0", Protocol: daemonProtocol}, "v0.6.0", "release", "client-outdated"},
+		{"protocol", &Status{Version: "v0.7.0", Protocol: daemonProtocol + 1}, "v0.6.0", "release", "incompatible"},
+		{"dev matching", &Status{Version: "dev", BuildID: "same", Protocol: daemonProtocol}, "dev", "same", "current"},
+		{"dev rebuilt", &Status{Version: "dev", BuildID: "old", Protocol: daemonProtocol}, "dev", "new", "daemon-outdated"},
+		{"dirty legacy", &Status{Version: "v0.6.0+dirty", Protocol: daemonProtocol}, "v0.6.0+dirty", "new", "daemon-outdated"},
+		{"dirty matching", &Status{Version: "v0.6.0+dirty", BuildID: "same", Protocol: daemonProtocol}, "v0.6.0+dirty", "same", "current"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, _ := daemonCompatibility(tt.status, tt.client); got != tt.want {
+			if got, _ := daemonCompatibility(tt.status, tt.clientVersion, tt.clientBuildID); got != tt.want {
 				t.Fatalf("got %s, want %s", got, tt.want)
 			}
 		})
@@ -42,6 +46,9 @@ func TestJSONStatusStoppedAndStale(t *testing.T) {
 	var status machineStatus
 	if err != nil || json.Unmarshal([]byte(out), &status) != nil || status.Running || status.State != "stopped" || status.Compatibility != "not-running" {
 		t.Fatalf("stopped: %s %v", out, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath()), 0700); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(socketPath(), []byte("127.0.0.1:1"), 0600); err != nil {
 		t.Fatal(err)

@@ -12,22 +12,26 @@ import (
 // TestDaemonUpgradeCompatibility checks which version pairs require a daemon replacement.
 func TestDaemonUpgradeCompatibility(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		status  Status
-		client  string
-		upgrade bool
-		fail    bool
+		name          string
+		status        Status
+		clientVersion string
+		clientBuildID string
+		upgrade       bool
+		fail          bool
 	}{
-		{"legacy daemon", Status{}, "v0.4.1", true, false},
-		{"same release", Status{Protocol: daemonProtocol, Version: "v0.4.1"}, "v0.4.1", false, false},
-		{"older release", Status{Protocol: daemonProtocol, Version: "v0.4.1"}, "v0.4.2", true, false},
-		{"newer daemon", Status{Protocol: daemonProtocol, Version: "v0.5.0"}, "v0.4.1", false, false},
-		{"development build", Status{Protocol: daemonProtocol, Version: "dev"}, "dev", false, false},
-		{"release replaces dev", Status{Protocol: daemonProtocol, Version: "dev"}, "v0.4.1", true, false},
-		{"newer protocol", Status{Protocol: daemonProtocol + 1, Version: "v0.5.0"}, "v0.4.1", false, true},
+		{"legacy daemon", Status{}, "v0.4.1", "release", true, false},
+		{"same release", Status{Protocol: daemonProtocol, Version: "v0.4.1"}, "v0.4.1", "release", false, false},
+		{"older release", Status{Protocol: daemonProtocol, Version: "v0.4.1"}, "v0.4.2", "release", true, false},
+		{"newer daemon", Status{Protocol: daemonProtocol, Version: "v0.5.0"}, "v0.4.1", "release", false, false},
+		{"matching development build", Status{Protocol: daemonProtocol, Version: "dev", BuildID: "same"}, "dev", "same", false, false},
+		{"rebuilt development client", Status{Protocol: daemonProtocol, Version: "dev", BuildID: "old"}, "dev", "new", true, false},
+		{"legacy dirty daemon", Status{Protocol: daemonProtocol, Version: "v0.4.1+dirty"}, "v0.4.1+dirty", "new", true, false},
+		{"matching dirty build", Status{Protocol: daemonProtocol, Version: "v0.4.1+dirty", BuildID: "same"}, "v0.4.1+dirty", "same", false, false},
+		{"release replaces dev", Status{Protocol: daemonProtocol, Version: "dev"}, "v0.4.1", "release", true, false},
+		{"newer protocol", Status{Protocol: daemonProtocol + 1, Version: "v0.5.0"}, "v0.4.1", "release", false, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			upgrade, err := daemonNeedsUpgrade(tt.status, tt.client)
+			upgrade, err := daemonNeedsUpgrade(tt.status, tt.clientVersion, tt.clientBuildID)
 			if upgrade != tt.upgrade || (err != nil) != tt.fail {
 				t.Fatalf("upgrade=%v error=%v", upgrade, err)
 			}

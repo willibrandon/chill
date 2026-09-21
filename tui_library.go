@@ -42,6 +42,8 @@ type libraryResultMsg struct {
 }
 
 func (t *tui) openLibrary() tea.Cmd {
+	t.closeProviders()
+	t.closeAudio()
 	b := &t.libraryUI
 	b.open = true
 	b.page = "home"
