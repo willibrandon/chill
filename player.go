@@ -16,6 +16,8 @@ import (
 	"github.com/willibrandon/chill/internal/streammeta"
 )
 
+const mpvCommandTimeout = 5 * time.Second
+
 type playerEvent struct {
 	loaded     bool
 	ended      bool
@@ -196,14 +198,14 @@ func (p *mpvPlayer) command(args ...any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.id++
-	p.conn.SetWriteDeadline(time.Now().Add(time.Second))
+	p.conn.SetWriteDeadline(time.Now().Add(mpvCommandTimeout))
 	if err := json.NewEncoder(p.conn).Encode(struct {
 		Command []any `json:"command"`
 		ID      int   `json:"request_id"`
 	}{args, p.id}); err != nil {
 		return fmt.Errorf("mpv command: %w", err)
 	}
-	timer := time.NewTimer(time.Second)
+	timer := time.NewTimer(mpvCommandTimeout)
 	defer timer.Stop()
 	for {
 		select {
