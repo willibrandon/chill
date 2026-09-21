@@ -22,6 +22,7 @@ func withConfigDir(t *testing.T) string {
 	t.Setenv("XDG_CONFIG_HOME", dir) // linux and the unix fallback
 	t.Setenv("HOME", dir)            // darwin, and unix without XDG
 	t.Setenv("AppData", dir)         // windows
+	t.Setenv("LocalAppData", dir)    // windows cache
 	// Keep config commands from notifying a real daemon during tests.
 	t.Setenv("TMPDIR", dir)
 	t.Setenv("TMP", dir)
