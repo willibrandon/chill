@@ -299,7 +299,7 @@ func (p *pcmPlayer) artwork() string {
 	return d.artwork
 }
 func (p *pcmPlayer) decode(d *preparedDecoder) error {
-	reader, artwork, err := openPCM(d.ctx, d.source, d.offset, d.finite, p.audio, func(title string) {
+	reader, artwork, err := openPlaybackPCM(d.ctx, d.source, d.offset, d.finite, p.audio, func(title string) {
 		d.mu.Lock()
 		d.title = title
 		d.mu.Unlock()

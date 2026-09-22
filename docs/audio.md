@@ -26,6 +26,12 @@ Changing an individual sample rate, buffer, or resampling value selects Custom.
 Supported sample rates are 44.1, 48, 88.2, 96, 176.4, and 192 kHz. Buffer size
 ranges from 50 to 5000 milliseconds and resampling quality from 1 to 4.
 
+The buffer setting controls the output queue. Network playback also reads ahead
+independently to absorb uneven delivery, including with Automatic selected.
+If that reserve runs out, playback waits for it to refill before resuming.
+Low Latency keeps a smaller network reserve to stay closer to a live stream.
+Local files begin playing without this extra buffering.
+
 ```sh
 chill audio
 chill audio profile Lossless

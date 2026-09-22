@@ -55,7 +55,14 @@ func (r *replaySource) Read(p []byte) (int, error) {
 func (r *replaySource) Close() error { return nil }
 
 func openPCM(ctx context.Context, source string, offset time.Duration, finite bool, settings AudioSettings, onTitle func(string)) (io.ReadCloser, string, error) {
-	return openPCMSource(ctx, source, offset, finite, settings, onTitle, true)
+	reader, artwork, err := openPCMSource(ctx, source, offset, finite, settings, onTitle, true)
+	if canceled := ctx.Err(); canceled != nil {
+		if reader != nil {
+			reader.Close()
+		}
+		return nil, "", canceled
+	}
+	return reader, artwork, err
 }
 
 func openPCMSource(ctx context.Context, source string, offset time.Duration, finite bool, settings AudioSettings, onTitle func(string), allowRange bool) (io.ReadCloser, string, error) {
@@ -96,6 +103,12 @@ func openPCMSource(ctx context.Context, source string, offset time.Duration, fin
 	cleanup := func() error { stop(); return body.Close() }
 	buffered := bufio.NewReaderSize(body, 4096)
 	prefix, _ := buffered.Peek(512)
+	// Cancellation can interrupt the sniff before even a codec signature arrives.
+	// Do not treat that incomplete header as a reason to start another decoder.
+	if err := ctx.Err(); err != nil {
+		cleanup()
+		return nil, "", err
+	}
 	kind := playback.Format(prefix)
 	if i := bytes.Index(prefix, []byte("\x01vorbis")); kind == "vorbis" && i >= 0 && i+11 < len(prefix) && prefix[i+11] > 2 {
 		kind = "" // Multichannel sources need FFmpeg's layout-aware downmix.
@@ -234,6 +247,9 @@ func (p *processPCM) Close() error {
 }
 
 func startPCMProcess(ctx context.Context, cmd *exec.Cmd, input io.ReadCloser, diagnostics *tailBuffer) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	if input != nil {
 		cmd.Stdin = input
@@ -275,6 +291,10 @@ func startPCMProcess(ctx context.Context, cmd *exec.Cmd, input io.ReadCloser, di
 		}
 		p.done <- err
 	}()
+	if err := ctx.Err(); err != nil {
+		p.Close()
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -329,7 +349,7 @@ func openWebsitePCM(ctx context.Context, source string, settings AudioSettings, 
 		return nil, "", err
 	}
 	format := "bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio[protocol!=m3u8_native][protocol!=m3u8]/bestaudio/best"
-	args = append(args, "--ffmpeg-location", ffmpeg, "--quiet", "--format", format, "--output", "-", "--", source)
+	args = append(args, "--ffmpeg-location", ffmpeg, "--downloader-args", "ffmpeg_i:-rw_timeout 15000000", "--quiet", "--format", format, "--output", "-", "--", source)
 	cmd := exec.Command(path, args...)
 	var diagnostics tailBuffer
 	cmd.Stderr = &diagnostics
