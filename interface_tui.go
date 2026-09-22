@@ -122,7 +122,18 @@ func (t *tui) interfaceBanner() string {
 
 func (t *tui) refreshInterfaceBanner() {
 	if len(t.lines) > 0 && strings.HasPrefix(ansi.Strip(t.lines[0]), "chill  type a station") {
-		t.lines[0] = styleDim.Render(t.interfaceBanner())
+		banner := styleDim.Render(t.interfaceBanner())
+		if t.lines[0] != banner {
+			follow := t.viewport.AtBottom()
+			offset := t.viewport.YOffset()
+			oldRows := len(t.wrapped(t.lines[0]))
+			t.lines[0] = banner
+			newRows := len(t.wrapped(banner))
+			t.wrap()
+			if !follow {
+				t.viewport.SetYOffset(max(0, offset+newRows-oldRows))
+			}
+		}
 	}
 }
 
@@ -314,7 +325,7 @@ func (t *tui) appearanceKey(msg tea.KeyPressMsg) tea.Cmd {
 			value := strings.TrimSpace(browser.input.Value())
 			if browser.editing == "directory" {
 				if value == "" {
-					browser.note = "directory cannot be empty"
+					browser.note = "error: directory cannot be empty"
 					return nil
 				}
 				browser.settings.InitialDirectory = value
@@ -377,11 +388,31 @@ func (t *tui) appearanceKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (t *tui) enforcePresentationMode() {
+	if t.presentation.Simplified {
+		t.inlineUsed = true
+	}
 	if !t.presentation.Simplified && !t.presentation.LowPower {
+		t.modeNote = ""
 		return
 	}
+	t.setPresentationModeWarning()
 	t.viz.enabled, t.viz.focused, t.viz.fullscreen = false, false, false
 	t.closeVisualizer()
+}
+
+func (t *tui) setPresentationModeWarning() {
+	t.modeNote = presentationModeWarning(t.presentation)
+}
+
+func presentationModeWarning(settings interfaceSettings) string {
+	switch {
+	case settings.Simplified:
+		return "visualizer disabled in simplified mode"
+	case settings.LowPower:
+		return "visualizer disabled in low-power mode"
+	default:
+		return ""
+	}
 }
 
 func (t *tui) interfaceColorProfileCommand() tea.Cmd {
@@ -424,7 +455,11 @@ func (t *tui) appearanceView() tea.View {
 		lines[line+2] = styleDim.Render("  ") + styleCommand.Render(column(row.label, labelWidth)) + styleInput.Render(ansi.Truncate(row.value, max(0, t.width-labelWidth-2), "…"))
 	}
 	if t.height >= 4 {
-		lines[t.height-3] = styleDim.Render(ansi.Truncate(t.appearance.note, t.width, "…"))
+		note := t.appearance.note
+		if t.modeNote != "" && !strings.HasPrefix(strings.TrimSpace(note), "error:") {
+			note = t.modeNote
+		}
+		lines[t.height-3] = styleDim.Render(ansi.Truncate(note, t.width, "…"))
 		if t.appearance.editing != "" {
 			t.appearance.input.SetWidth(max(1, t.width-3))
 			lines[t.height-2] = t.appearance.input.View()

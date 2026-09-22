@@ -196,8 +196,16 @@ func (t *tui) cancelSelection() {
 
 // cellAt returns the transcript cell under a screen position.
 func (t *tui) cellAt(x, y int) (point, bool) {
-	if len(t.rows) == 0 || y < 0 || y >= t.viewport.Height() || x < 0 || x >= t.viewport.Width() {
+	if len(t.rows) == 0 || y < 0 || y >= t.transcriptHeight() || x < 0 || x >= t.viewport.Width() {
 		return point{}, false
+	}
+	if t.modeNote != "" {
+		if y == 1 {
+			return point{}, false
+		}
+		if y > 1 {
+			y--
+		}
 	}
 	return point{min(t.viewport.YOffset()+y, len(t.rows)-1), x}, true
 }
@@ -232,12 +240,12 @@ func (t *tui) mouse(msg tea.MouseMsg) tea.Cmd {
 		// dragging past the edge scrolls
 		if m.Y <= 0 {
 			t.viewport.ScrollUp(1)
-		} else if m.Y >= t.viewport.Height()-1 {
+		} else if m.Y >= t.transcriptHeight()-1 {
 			t.viewport.ScrollDown(1)
 		}
 
 		x := min(max(m.X, 0), t.viewport.Width()-1)
-		y := min(max(m.Y, 0), t.viewport.Height()-1)
+		y := min(max(m.Y, 0), t.transcriptHeight()-1)
 		if p, ok := t.cellAt(x, y); ok && (t.sel.active || p != t.sel.anchor) {
 			t.sel.cursor = p
 			t.sel.active = true
