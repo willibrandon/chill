@@ -148,11 +148,7 @@ func (t *tui) visualizerCommand(arg string) {
 	}
 	if t.presentation.Simplified || t.presentation.LowPower {
 		v.enabled, v.focused, v.fullscreen = false, false, false
-		mode := "simplified"
-		if t.presentation.LowPower {
-			mode = "low-power"
-		}
-		t.print(styleDim.Render("  visualizer disabled in " + mode + " mode"))
+		t.setPresentationModeWarning()
 		return
 	}
 	v.enabled, v.focused = true, true

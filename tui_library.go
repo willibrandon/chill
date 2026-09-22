@@ -604,6 +604,7 @@ func runReplLibrary() {
 	model.libraryStart = true
 	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
+	model.cleanupTerminal(os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	}

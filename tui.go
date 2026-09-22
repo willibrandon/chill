@@ -75,6 +75,7 @@ type tui struct {
 	flash    selection // what was just copied, lit up briefly
 	flashing bool
 	notice   string // what the status bar says was copied
+	modeNote string // presentation-mode warning shown below the banner
 	copies   int    // identifies the latest copy, whose feedback is showing
 
 	suggestions []suggestion // offered for what is being typed
@@ -114,6 +115,7 @@ type tui struct {
 	providersUI     providerBrowser
 	audioUI         audioBrowser
 	presentation    interfaceSettings
+	inlineUsed      bool
 	terminalProfile colorprofile.Profile
 	appearance      appearanceBrowser
 	keyOverlay      keyOverlay
@@ -144,6 +146,8 @@ func newTUI() *tui {
 		histPos:      len(h.lines),
 		eq:           replEqualizer{config: defaultEqualizerConfig()},
 		presentation: settings,
+		modeNote:     presentationModeWarning(settings),
+		inlineUsed:   settings.Simplified,
 	}
 	t.viewport.MouseWheelDelta = 3
 	t.helpView.SoftWrap = true
@@ -878,6 +882,8 @@ func (t *tui) wrapped(line string) []string {
 // wrap lays the whole transcript out again, for a new width or after old
 // lines were dropped. Rows move, so what was selected no longer holds.
 func (t *tui) wrap() {
+	follow := t.viewport.AtBottom()
+	offset := t.viewport.YOffset()
 	t.rows = nil
 	t.activeRow, t.activeExtraRow = -1, false
 	for i, line := range t.lines {
@@ -885,6 +891,11 @@ func (t *tui) wrap() {
 	}
 	t.sel, t.flashing = selection{}, false
 	t.redraw()
+	if follow {
+		t.viewport.GotoBottom()
+	} else {
+		t.viewport.SetYOffset(offset)
+	}
 }
 
 // clear empties the transcript, leaving the banner.
@@ -1014,7 +1025,7 @@ func (t *tui) fit() {
 	if t.presentation.ShowStatus {
 		statusHeight = 1
 	}
-	t.viewport.SetHeight(max(t.height-2-statusHeight-t.paletteHeight()-t.visualizerHeight()-t.panelHeight(), 1))
+	t.viewport.SetHeight(max(t.height-2-statusHeight-t.paletteHeight()-t.visualizerHeight()-t.panelHeight()-t.modeNoteHeight(), 1))
 	if follow || t.viewport.PastBottom() {
 		t.viewport.GotoBottom()
 	}
@@ -1101,7 +1112,7 @@ func (t *tui) View() tea.View {
 		return t.decoratedView(v)
 	}
 
-	parts := []string{withScrollbar(t.viewport)}
+	parts := []string{t.transcriptView()}
 	if panels := t.panelView(); panels != "" {
 		parts = append(parts, panels)
 	}
@@ -1119,10 +1130,36 @@ func (t *tui) View() tea.View {
 	v.SetContent(strings.Join(parts, "\n"))
 
 	if c := t.input.Cursor(); c != nil && !t.viz.focused {
-		c.Y += t.viewport.Height() + 1 + t.paletteHeight() + t.visualizerHeight() + t.panelHeight()
+		c.Y += t.transcriptHeight() + 1 + t.paletteHeight() + t.visualizerHeight() + t.panelHeight()
 		v.Cursor = c
 	}
 	return t.decoratedView(v)
+}
+
+func (t *tui) modeNoteHeight() int {
+	if t.modeNote != "" {
+		return 1
+	}
+	return 0
+}
+
+func (t *tui) transcriptHeight() int {
+	return t.viewport.Height() + t.modeNoteHeight()
+}
+
+func (t *tui) transcriptView() string {
+	content := withScrollbar(t.viewport)
+	if t.modeNote == "" {
+		return content
+	}
+	rows := strings.Split(content, "\n")
+	if len(rows) < 2 {
+		return strings.Join(append(rows, styleDim.Render("  "+t.modeNote)), "\n")
+	}
+	rows = append(rows, "")
+	copy(rows[2:], rows[1:len(rows)-1])
+	rows[1] = styleDim.Render("  " + t.modeNote)
+	return strings.Join(rows, "\n")
 }
 
 // withScrollbar renders a viewport with a scrollbar in the column after it,
@@ -1336,6 +1373,7 @@ func runRepl(podcastQuery ...string) {
 	}
 	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
+	model.cleanupTerminal(os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -1349,6 +1387,7 @@ func runReplRadio(foreground bool) {
 	model.radioStart, model.radioFG = true, foreground
 	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
+	model.cleanupTerminal(os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return
@@ -1362,4 +1401,10 @@ func runReplRadio(foreground bool) {
 	}
 	palette := currentCLIPalette()
 	fmt.Println(palette.dim + "~ stay chill ~" + palette.reset)
+}
+
+func (t *tui) cleanupTerminal(output io.Writer) {
+	if t.inlineUsed {
+		_, _ = io.WriteString(output, ansi.EraseEntireScreen+ansi.CursorHomePosition)
+	}
 }

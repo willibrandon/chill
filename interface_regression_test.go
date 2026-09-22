@@ -361,9 +361,229 @@ func TestAppearanceCancelRestoresVisualizerState(t *testing.T) {
 	if model.viz.enabled || model.viz.focused || model.viz.fullscreen {
 		t.Fatal("simplified preview did not suspend the visualizer")
 	}
+	warning := "visualizer disabled in simplified mode"
+	if model.modeNote != warning {
+		t.Fatalf("simplified preview warning = %q", model.modeNote)
+	}
+	if count := strings.Count(ansi.Strip(model.appearanceView().Content), warning); count != 1 {
+		t.Fatalf("simplified preview rendered its warning %d times", count)
+	}
+	if strings.Contains(ansi.Strip(strings.Join(model.lines, "\n")), warning) {
+		t.Fatal("simplified warning was stored in the transcript")
+	}
+	model.adjustAppearance(1)
+	if model.modeNote != "" {
+		t.Fatalf("simplified warning remained after disabling the mode: %q", model.modeNote)
+	}
+	if strings.Contains(ansi.Strip(model.appearanceView().Content), warning) {
+		t.Fatal("simplified warning remained visible after disabling the mode")
+	}
 	model.closeAppearance(false)
 	if !model.viz.enabled || !model.viz.focused || !model.viz.fullscreen {
 		t.Fatalf("cancel did not restore visualizer state: %+v", model.viz)
+	}
+}
+
+// TestSimplifiedModeAlwaysWarns checks the mode transition itself produces
+// feedback even when the visualizer was not active.
+func TestSimplifiedModeAlwaysWarns(t *testing.T) {
+	model := newTUI()
+	model.width, model.height = 100, 30
+	model.presentation.Simplified = true
+	model.enforcePresentationMode()
+	model.fit()
+	warning := "visualizer disabled in simplified mode"
+	if model.modeNote != warning {
+		t.Fatalf("simplified warning = %q", model.modeNote)
+	}
+	if count := strings.Count(ansi.Strip(model.transcriptView()), warning); count != 1 {
+		t.Fatalf("prompt rendered simplified warning %d times", count)
+	}
+	model.presentation.Simplified = false
+	model.enforcePresentationMode()
+	model.fit()
+	if strings.Contains(ansi.Strip(model.transcriptView()), warning) {
+		t.Fatal("prompt retained simplified warning after disabling the mode")
+	}
+}
+
+// TestModeWarningReservesTranscriptRow keeps the newest command result visible.
+func TestModeWarningReservesTranscriptRow(t *testing.T) {
+	model := newTUI()
+	model.presentation = defaultInterfaceSettings()
+	model.presentation.Simplified = true
+	model.modeNote = ""
+	model.width, model.height = 60, 8
+	model.enforcePresentationMode()
+	model.fit()
+	model.lines, model.rows = nil, nil
+	model.print(styleDim.Render(model.interfaceBanner()))
+	for range 20 {
+		model.print("  older output")
+	}
+	model.print(styleError.Render("  error: newest result"))
+
+	view := ansi.Strip(model.transcriptView())
+	if !strings.Contains(view, "error: newest result") {
+		t.Fatalf("mode warning hid the newest transcript row: %q", view)
+	}
+	if got, want := len(strings.Split(view, "\n")), model.transcriptHeight(); got != want {
+		t.Fatalf("transcript height = %d, want %d", got, want)
+	}
+}
+
+// TestModeWarningIsNotTranscriptContent keeps mouse selection aligned.
+func TestModeWarningIsNotTranscriptContent(t *testing.T) {
+	model := newTUI()
+	model.modeNote = "visualizer disabled in low-power mode"
+	model.rows = []string{"banner", "first", "second"}
+	model.viewport.SetWidth(20)
+	model.viewport.SetHeight(3)
+	model.redraw()
+	model.viewport.SetYOffset(0)
+
+	if _, ok := model.cellAt(0, 1); ok {
+		t.Fatal("mode warning mapped to transcript content")
+	}
+	point, ok := model.cellAt(0, 2)
+	if !ok || point.row != 1 {
+		t.Fatalf("first row below warning mapped to %+v, %v", point, ok)
+	}
+	point, ok = model.cellAt(0, model.transcriptHeight()-1)
+	if !ok || point.row != 2 {
+		t.Fatalf("bottom transcript row mapped to %+v, %v", point, ok)
+	}
+}
+
+// TestAppearanceErrorPrecedesModeWarning keeps failed edits actionable.
+func TestAppearanceErrorPrecedesModeWarning(t *testing.T) {
+	model := newTUI()
+	model.width, model.height = 100, 30
+	model.appearance.open = true
+	model.appearance.note = "error: directory cannot be empty"
+	model.modeNote = "visualizer disabled in simplified mode"
+	view := ansi.Strip(model.appearanceView().Content)
+	if !strings.Contains(view, model.appearance.note) {
+		t.Fatalf("appearance error was hidden by mode warning: %q", view)
+	}
+}
+
+// TestBannerRefreshPreservesTranscriptPosition covers both follow and anchors.
+func TestBannerRefreshPreservesTranscriptPosition(t *testing.T) {
+	newModel := func() *tui {
+		model := newTUI()
+		model.presentation = defaultInterfaceSettings()
+		model.presentation.ShowHelp = false
+		model.modeNote = ""
+		model.width, model.height = 72, 10
+		model.lines = []string{styleDim.Render(model.interfaceBanner())}
+		for range 30 {
+			model.lines = append(model.lines, "  transcript output")
+		}
+		model.lines = append(model.lines, "  latest result")
+		model.wrap()
+		model.fit()
+		return model
+	}
+
+	t.Run("following", func(t *testing.T) {
+		model := newModel()
+		model.viewport.GotoBottom()
+		model.presentation.ShowHelp = true
+		model.refreshInterfaceBanner()
+		model.fit()
+		if !model.viewport.AtBottom() {
+			t.Fatal("banner refresh stopped following the transcript")
+		}
+		if view := ansi.Strip(model.transcriptView()); !strings.Contains(view, "latest result") {
+			t.Fatalf("banner refresh hid the latest result: %q", view)
+		}
+	})
+
+	t.Run("scrolled", func(t *testing.T) {
+		model := newModel()
+		model.viewport.SetYOffset(5)
+		before := ansi.Strip(strings.Split(model.transcriptView(), "\n")[0])
+		model.presentation.ShowHelp = true
+		model.refreshInterfaceBanner()
+		model.fit()
+		after := ansi.Strip(strings.Split(model.transcriptView(), "\n")[0])
+		if after != before {
+			t.Fatalf("banner refresh moved scroll anchor from %q to %q", before, after)
+		}
+	})
+}
+
+// TestSavedSimplifiedModeWarningLifecycle covers the complete F10 save path.
+func TestSavedSimplifiedModeWarningLifecycle(t *testing.T) {
+	withConfigDir(t)
+	setInterfaceSessionOverrides(interfaceSessionOverrides{})
+	t.Cleanup(func() {
+		_, _, _ = activateInterfaceSettings(defaultInterfaceSettings())
+	})
+	settings := defaultInterfaceSettings()
+	if err := saveInterfaceSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = activateInterfaceSettings(settings)
+
+	model := newTUI()
+	model.width, model.height = 100, 30
+	model.fit()
+	model.openAppearance()
+	for index, row := range model.appearanceRows() {
+		if row.id == "simplified" {
+			model.appearance.selected = index
+			break
+		}
+	}
+	model.adjustAppearance(1)
+	model.closeAppearance(true)
+	warning := "visualizer disabled in simplified mode"
+	if !strings.Contains(ansi.Strip(model.transcriptView()), warning) {
+		t.Fatal("saved simplified mode did not show its warning at the prompt")
+	}
+	if strings.Contains(ansi.Strip(strings.Join(model.lines, "\n")), warning) {
+		t.Fatal("saved simplified warning entered the transcript")
+	}
+	restarted := newTUI()
+	restarted.width, restarted.height = 100, 30
+	restarted.fit()
+	if !strings.Contains(ansi.Strip(restarted.transcriptView()), warning) {
+		t.Fatal("simplified startup did not show its warning at the prompt")
+	}
+
+	model.openAppearance()
+	model.adjustAppearance(1)
+	model.closeAppearance(true)
+	if strings.Contains(ansi.Strip(model.transcriptView()), warning) {
+		t.Fatal("saved simplified-off mode retained its warning at the prompt")
+	}
+	if banner := ansi.Strip(strings.Join(model.rows, "\n")); !strings.Contains(banner, "F2 visualizer") {
+		t.Fatalf("saved simplified-off mode retained its reduced banner: %q", banner)
+	}
+	loaded, err := loadInterfaceSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Simplified {
+		t.Fatal("simplified mode remained enabled after saving it off")
+	}
+}
+
+// TestInlineCleanupSurvivesDisablingSimplifiedMode covers the live-preview
+// transition that leaves content in the normal terminal buffer.
+func TestInlineCleanupSurvivesDisablingSimplifiedMode(t *testing.T) {
+	model := newTUI()
+	model.presentation.Simplified = true
+	model.enforcePresentationMode()
+	model.presentation.Simplified = false
+	model.enforcePresentationMode()
+
+	var output strings.Builder
+	model.cleanupTerminal(&output)
+	if got, want := output.String(), ansi.EraseEntireScreen+ansi.CursorHomePosition; got != want {
+		t.Fatalf("terminal cleanup = %q, want %q", got, want)
 	}
 }
 
