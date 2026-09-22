@@ -109,10 +109,11 @@ type remoteService struct {
 }
 
 type remoteSnapshot struct {
-	Playback      Status          `json:"playback"`  // Playback contains current transport, queue, metadata, and settings.
-	Library       *libraryState   `json:"library"`   // Library contains durable queues, playlists, favorites, history, and resume points.
-	Podcasts      *podcastLibrary `json:"podcasts"`  // Podcasts contains subscriptions, inbox, progress, downloads, and policies.
-	Providers     []providerInfo  `json:"providers"` // Providers describes enabled catalog capabilities.
+	Playback      Status            `json:"playback"`  // Playback contains current transport, queue, metadata, and settings.
+	Library       *libraryState     `json:"library"`   // Library contains durable queues, playlists, favorites, history, and resume points.
+	Podcasts      *podcastLibrary   `json:"podcasts"`  // Podcasts contains subscriptions, inbox, progress, downloads, and policies.
+	Providers     []providerInfo    `json:"providers"` // Providers describes enabled catalog capabilities.
+	Interface     interfaceSettings `json:"interface"` // Interface contains shared terminal presentation preferences.
 	libraryChange uint64
 	podcastChange uint64
 }
@@ -145,6 +146,7 @@ var remoteCapabilities = []remoteCapability{
 	{Name: "settings.equalizer", Description: "show or change the equalizer", Parameters: []string{"value"}},
 	{Name: "settings.notifications", Description: "show or change notifications", Parameters: []string{"value"}},
 	{Name: "settings.audio", Description: "show or change audio output settings", Parameters: []string{"profile", "device", "sample_rate", "buffer_ms", "resample_quality", "mono", "channels", "exclusive"}},
+	{Name: "settings.interface", Description: "show or change terminal interface settings", Parameters: []string{"theme", "color_mode", "character_mode", "simplified", "low_power", "visualizer_height", "show_status", "show_help_hints", "status_fields", "seek_step", "seek_large_step", "initial_browser_directory", "default_screen", "panels", "bindings"}},
 	{Name: "device.list", Description: "list audio output devices"},
 	{Name: "device.set", Description: "switch audio output device", Parameters: []string{"id"}},
 	{Name: "provider.list", Description: "list configured providers", Parameters: []string{"validate"}},
@@ -296,7 +298,11 @@ func (service *remoteService) snapshot() (remoteSnapshot, error) {
 	if err != nil {
 		return remoteSnapshot{}, err
 	}
-	return remoteSnapshot{Playback: playback, Library: libraryCopy, Podcasts: podcastCopy, Providers: registry.list(context.Background(), false), libraryChange: libraryChange, podcastChange: podcastChange}, nil
+	interfaceState, interfaceErr := loadInterfaceSettings()
+	if interfaceErr != nil {
+		interfaceState = defaultInterfaceSettings()
+	}
+	return remoteSnapshot{Playback: playback, Library: libraryCopy, Podcasts: podcastCopy, Providers: registry.list(context.Background(), false), Interface: interfaceState, libraryChange: libraryChange, podcastChange: podcastChange}, nil
 }
 
 func (service *remoteService) spectrum() visualizerPacket {
@@ -563,8 +569,9 @@ func (service *remoteService) observe() {
 		Shuffle       bool                 `json:"shuffle"`
 		Repeat        string               `json:"repeat"`
 		Notifications bool                 `json:"notifications"`
+		Interface     interfaceSettings    `json:"interface"`
 	}{snapshot.Playback.Volume, snapshot.Playback.Muted, snapshot.Playback.EQPreset, snapshot.Playback.EQBands,
-		snapshot.Playback.Audio, snapshot.Playback.Shuffle, snapshot.Playback.Repeat, snapshot.Playback.Notifications}
+		snapshot.Playback.Audio, snapshot.Playback.Shuffle, snapshot.Playback.Repeat, snapshot.Playback.Notifications, snapshot.Interface}
 	metadataCopy := struct {
 		Item          *MediaItem     `json:"item"`
 		NowPlaying    any            `json:"now_playing,omitempty"`
@@ -723,6 +730,83 @@ func (d *Daemon) performStructuredRemoteOperation(ctx context.Context, operation
 		return d.remoteLegacyResult("audio", "device "+device, nil)
 	case "settings.audio":
 		return d.remoteAudioSettings(ctx, params)
+	case "settings.interface":
+		interfacePersistenceMu.Lock()
+		defer interfacePersistenceMu.Unlock()
+		settings, err := loadInterfaceSettingsUnlocked()
+		if err != nil {
+			return nil, true, err
+		}
+		if len(params) == 0 {
+			return settings, true, nil
+		}
+		recognized := false
+		for _, field := range []struct {
+			name   string
+			target *string
+		}{
+			{"theme", &settings.Theme}, {"color_mode", &settings.ColorMode}, {"character_mode", &settings.CharacterMode},
+			{"initial_browser_directory", &settings.InitialDirectory}, {"default_screen", &settings.DefaultScreen},
+		} {
+			if raw, ok := params[field.name]; ok {
+				text, valid := raw.(string)
+				if !valid {
+					return nil, true, fmt.Errorf("%s must be a string", field.name)
+				}
+				*field.target, recognized = text, true
+			}
+		}
+		for _, field := range []struct {
+			name   string
+			target *bool
+		}{
+			{"simplified", &settings.Simplified}, {"low_power", &settings.LowPower}, {"show_status", &settings.ShowStatus}, {"show_help_hints", &settings.ShowHelp},
+		} {
+			if raw, ok := params[field.name]; ok {
+				boolean, valid := raw.(bool)
+				if !valid {
+					return nil, true, fmt.Errorf("%s must be true or false", field.name)
+				}
+				*field.target, recognized = boolean, true
+			}
+		}
+		for _, field := range []struct {
+			name   string
+			target *int
+		}{
+			{"visualizer_height", &settings.VisualizerHeight}, {"seek_step", &settings.SeekStep}, {"seek_large_step", &settings.SeekLargeStep},
+		} {
+			if raw, ok := params[field.name]; ok {
+				number, valid := numberToInt(raw)
+				if !valid {
+					return nil, true, fmt.Errorf("%s must be an integer", field.name)
+				}
+				*field.target, recognized = number, true
+			}
+		}
+		if raw, ok := params["status_fields"]; ok {
+			fields, valid := stringSliceParam(raw)
+			if !valid {
+				return nil, true, errors.New("status_fields must be an array of strings")
+			}
+			settings.StatusFields, recognized = fields, true
+		}
+		for name, target := range map[string]any{"panels": &settings.Panels, "bindings": &settings.Bindings} {
+			if raw, ok := params[name]; ok {
+				data, marshalErr := json.Marshal(raw)
+				if marshalErr != nil || json.Unmarshal(data, target) != nil {
+					return nil, true, fmt.Errorf("%s has an invalid shape", name)
+				}
+				recognized = true
+			}
+		}
+		if !recognized {
+			return nil, true, errors.New("at least one interface setting is required")
+		}
+		if err := saveInterfaceSettingsUnlocked(settings); err != nil {
+			return nil, true, err
+		}
+		return settings, true, nil
 	case "library.state":
 		library, err := d.remoteLibraryState()
 		return library, true, err

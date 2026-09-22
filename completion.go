@@ -11,12 +11,14 @@ var completionCommands = []string{
 	"audio", "device", "mono", "shuffle", "repeat", "favorite", "bookmark", "pause", "resume", "toggle", "stop",
 	"status", "volume", "eq", "podcasts", "radio", "history", "lyrics", "notifications", "seek", "speed", "next",
 	"prev", "doctor", "add", "remove", "default", "update", "completion",
+	"theme", "keys", "interface",
 }
 
 var completionOptions = []string{
 	"--fg", "--json", "--station", "--vol", "--seek", "--speed", "--eq", "--shuffle", "--repeat", "--device",
 	"--audio-profile", "--sample-rate", "--buffer", "--resample-quality", "--mono", "--mute", "--status", "--stop",
 	"--toggle", "--skip", "--sleep", "--list", "--version", "--help",
+	"--theme", "--no-color", "--simplified", "--low-power",
 }
 
 func runCompletionCommand(args []string) (string, error) {
@@ -52,6 +54,9 @@ func runCompletionCommand(args []string) (string, error) {
     audio) COMPREPLY=( $(compgen -W "profile device sample-rate buffer resample-quality mono channels exclusive list" -- "$cur") );;
     device) COMPREPLY=( $(compgen -W "list set default" -- "$cur") );;
     link) COMPREPLY=( $(compgen -W "open register unregister status" -- "$cur") );;
+		theme) COMPREPLY=( $(compgen -W "list show set preview validate" -- "$cur") );;
+		keys) COMPREPLY=( $(compgen -W "list search set reset conflicts" -- "$cur") );;
+		interface) COMPREPLY=( $(compgen -W "show set panel reset" -- "$cur") );;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish powershell" -- "$cur") );;
     *) COMPREPLY=( $(compgen -W "` + words + `" -- "$cur") );;
   esac
@@ -79,6 +84,12 @@ _chill() {
     _values 'device command' list set default
   elif [[ "${words[2]}" == link ]]; then
     _values 'link command' open register unregister status
+	elif [[ "${words[2]}" == theme ]]; then
+		_values 'theme command' list show set preview validate
+	elif [[ "${words[2]}" == keys ]]; then
+		_values 'keys command' list search set reset conflicts
+	elif [[ "${words[2]}" == interface ]]; then
+		_values 'interface command' show set panel reset
   elif [[ "${words[CURRENT-1]}" == --provider || "${words[2]}" == setup || "${words[2]}" == browse ]]; then
     _describe 'provider' providers
   elif [[ "${words[2]}" == completion ]]; then
@@ -104,6 +115,9 @@ compdef _chill chill`, nil
 			"complete -c chill -f -n '__fish_seen_subcommand_from audio' -a 'profile device sample-rate buffer resample-quality mono channels exclusive list'",
 			"complete -c chill -f -n '__fish_seen_subcommand_from device' -a 'list set default'",
 			"complete -c chill -f -n '__fish_seen_subcommand_from link' -a 'open register unregister status'",
+			"complete -c chill -f -n '__fish_seen_subcommand_from theme' -a 'list show set preview validate'",
+			"complete -c chill -f -n '__fish_seen_subcommand_from keys' -a 'list search set reset conflicts'",
+			"complete -c chill -f -n '__fish_seen_subcommand_from interface' -a 'show set panel reset'",
 		)
 		return strings.Join(lines, "\n"), nil
 	case "powershell", "pwsh":
@@ -125,6 +139,12 @@ compdef _chill chill`, nil
     $values = @('list', 'set', 'default')
   } elseif ($line -match '^chill\s+link(?:\s|$)') {
     $values = @('open', 'register', 'unregister', 'status')
+  } elseif ($line -match '^chill\s+theme(?:\s|$)') {
+    $values = @('list', 'show', 'set', 'preview', 'validate')
+  } elseif ($line -match '^chill\s+keys(?:\s|$)') {
+    $values = @('list', 'search', 'set', 'reset', 'conflicts')
+  } elseif ($line -match '^chill\s+interface(?:\s|$)') {
+    $values = @('show', 'set', 'panel', 'reset')
   }
   $values |
     Where-Object { $_ -like "$wordToComplete*" } |

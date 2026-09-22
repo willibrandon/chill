@@ -291,7 +291,7 @@ func (t *tui) extendLines(step int) {
 // selectionKey handles a key press while something is selected. It reports
 // false for keys that should go on to the prompt, which end the selection.
 func (t *tui) selectionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	switch msg.String() {
+	switch t.presentation.mapKey("selection", msg.String()) {
 	case "y", "enter", "ctrl+c":
 		return t.copySelection(), true
 
@@ -311,9 +311,16 @@ func (t *tui) selectionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 
-	case "pgup", "pgdown", "ctrl+q":
-		// scrolling and quitting leave the selection alone
-		return nil, false
+	case "pgup":
+		t.viewport.PageUp()
+		return nil, true
+
+	case "pgdown":
+		t.viewport.PageDown()
+		return nil, true
+
+	case "ctrl+q":
+		return tea.Quit, true
 	}
 
 	t.cancelSelection()

@@ -460,14 +460,8 @@ func stationSlug(name string) string {
 func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 	r := &t.radio
 	key := msg.String()
-	if key == "ctrl+q" {
-		return tea.Quit
-	}
-	if key == "f5" {
-		t.closeRadio()
-		return nil
-	}
 	if r.consent {
+		key = t.presentation.mapKey("radio-consent", key)
 		switch key {
 		case "y":
 			detect := r.detectCountry
@@ -501,6 +495,7 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if r.editing {
+		key = t.presentation.mapKey("editor", key)
 		switch key {
 		case "esc", "ctrl+c":
 			r.editing, r.page.filter = false, ""
@@ -519,8 +514,13 @@ func (t *tui) radioKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	key = t.presentation.mapKey("radio", key)
 	rows := r.rows()
 	switch key {
+	case "ctrl+q":
+		return tea.Quit
+	case "f5":
+		t.closeRadio()
 	case "esc", "b":
 		if r.cancel != nil {
 			r.cancel()
@@ -688,7 +688,8 @@ func (t *tui) radioView() tea.View {
 		heading += " · " + radioSortName(r.page.query.Sort)
 	}
 	lines[0] = fit(styleHeading.Render(heading))
-	rows, room := r.rows(), max(0, height-6)
+	layout := t.contentLayout(height, r.editing, 2)
+	rows, room := r.rows(), layout.room
 	first := max(0, min(r.page.selected-room/2, len(rows)-room))
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
@@ -700,37 +701,44 @@ func (t *tui) radioView() tea.View {
 		lines[row+2] = style.Render(fit(prefix + text))
 	}
 	if room > 0 && len(rows) == 0 && !r.loading {
-		lines[2] = styleDim.Render("  No results. Ctrl+F searches stations.")
+		lines[2] = styleDim.Render("  No results. " + t.presentation.bindingLabel("radio.global-search") + " searches stations.")
 	}
-	if height >= 5 {
+	if layout.note >= 0 {
 		note := r.note
 		if r.loading {
-			note = "Loading… Ctrl+C cancels"
+			note = "Loading… " + t.presentation.bindingHint("radio.cancel", "cancels")
 		} else if note == "" {
 			note = fmt.Sprintf("%d items", len(rows))
 			if r.page.filter != "" {
 				note += " · filter: " + r.page.filter
 			}
 		}
-		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter open/play · q queue · n play next · f favorite · p pin · a save · / filter · Ctrl+F search · Ctrl+R refresh"))
-		footer := "o sort · [ ] page · l lyrics · Space pause · Esc back · F5 prompt"
-		if t.radioFG {
-			footer = "Enter play in foreground · o sort · [ ] page · Esc back · F5 prompt"
+		if t.presentation.Panels["metadata"] && len(rows) > 0 {
+			note += " · selected: " + r.rowText(rows[min(r.page.selected, len(rows)-1)])
 		}
-		lines[height-2] = fit(styleDim.Render(footer))
-		if r.editing {
+		lines[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			lines[layout.firstHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingHint("browser.select", "open/play"), t.presentation.bindingHint("radio.queue", "queue"), t.presentation.bindingHint("radio.play-next", "play next"), t.presentation.bindingHint("browser.favorite", "favorite"), t.presentation.bindingHint("radio.pin", "pin"), t.presentation.bindingHint("radio.save", "save"), t.presentation.bindingHint("browser.search", "filter"), t.presentation.bindingHint("radio.global-search", "search"), t.presentation.bindingHint("browser.refresh", "refresh")}, " · ")))
+			footer := strings.Join([]string{t.presentation.bindingHint("radio.sort", "sort"), t.presentation.bindingPairHint("radio.previous-page", "radio.next-page", "page"), t.presentation.bindingHint("radio.lyrics", "lyrics"), t.presentation.bindingHint("browser.pause", "pause"), t.presentation.bindingHint("browser.back", "back"), t.presentation.bindingHint("global.radio", "prompt")}, " · ")
+			if t.radioFG {
+				footer = strings.Join([]string{t.presentation.bindingHint("browser.select", "play in foreground"), t.presentation.bindingHint("radio.sort", "sort"), t.presentation.bindingPairHint("radio.previous-page", "radio.next-page", "page"), t.presentation.bindingHint("browser.back", "back"), t.presentation.bindingHint("global.radio", "prompt")}, " · ")
+			}
+			lines[layout.secondHint] = fit(styleDim.Render(footer))
+		}
+		if r.editing && layout.input >= 0 {
 			r.input.SetWidth(max(1, width-3))
-			lines[height-2] = fit(r.input.View())
+			lines[layout.input] = fit(r.input.View())
 		}
-		lines[height-1] = t.statusBar()
+		if layout.status >= 0 {
+			lines[layout.status] = t.statusBar()
+		}
 	}
 	v := tea.NewView(strings.Join(lines, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	if r.editing && height >= 5 {
+	if r.editing && layout.input >= 0 {
 		if c := r.input.Cursor(); c != nil {
-			c.Y += height - 2
+			c.Y += layout.input
 			v.Cursor = c
 		}
 	}

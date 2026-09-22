@@ -302,17 +302,22 @@ func (browser *providerBrowser) searchScope(rows []int) string {
 	return "all"
 }
 
-func (browser *providerBrowser) loadingText() string {
+func (browser *providerBrowser) loadingText(configured ...interfaceSettings) string {
+	settings := currentInterfaceSettings()
+	if len(configured) > 0 {
+		settings = configured[0]
+	}
 	indicator := browser.spinner.View()
+	cancel := settings.bindingHint("provider.cancel", "cancels")
 	if browser.results == nil {
-		return indicator + " Loading providers · Ctrl+C cancels"
+		return indicator + " Loading providers · " + cancel
 	}
 	name := browser.providerName(browser.provider)
 	if browser.provider != "all" {
-		return fmt.Sprintf("%s %s · searching for %q · Ctrl+C cancels", indicator, name, browser.searchQuery)
+		return fmt.Sprintf("%s %s · searching for %q · %s", indicator, name, browser.searchQuery, cancel)
 	}
 	complete := max(0, browser.searchTotal-browser.pending)
-	return fmt.Sprintf("%s All providers · searching for %q · %d of %d complete · Ctrl+C cancels", indicator, browser.searchQuery, complete, browser.searchTotal)
+	return fmt.Sprintf("%s All providers · searching for %q · %d of %d complete · %s", indicator, browser.searchQuery, complete, browser.searchTotal, cancel)
 }
 
 func (t *tui) beginProviderSearch(provider string) tea.Cmd {
@@ -344,14 +349,8 @@ func (t *tui) providerKey(message tea.KeyPressMsg) tea.Cmd {
 		return command
 	}
 	key := message.String()
-	if key == "ctrl+q" {
-		return tea.Quit
-	}
-	if key == "f8" {
-		t.closeProviders()
-		return nil
-	}
 	if browser.editing {
+		key = t.presentation.mapKey("editor", key)
 		switch key {
 		case "esc", "ctrl+c":
 			browser.editing, browser.searching = false, false
@@ -377,8 +376,13 @@ func (t *tui) providerKey(message tea.KeyPressMsg) tea.Cmd {
 		}
 		return command
 	}
+	key = t.presentation.mapKey("providers", key)
 	rows := browser.rows()
 	switch key {
+	case "ctrl+q":
+		return tea.Quit
+	case "f8":
+		t.closeProviders()
 	case "f7":
 		t.closeProviders()
 		return t.openLibrary()
@@ -472,7 +476,7 @@ func (t *tui) providerKey(message tea.KeyPressMsg) tea.Cmd {
 		if provider == "all" || !supportedProvider(provider) {
 			provider = ""
 		}
-		setup := providerSetupModel{document: document, secrets: secrets, provider: provider, picker: provider == "", embedded: true, width: t.width}
+		setup := providerSetupModel{document: document, secrets: secrets, provider: provider, picker: provider == "", embedded: true, width: t.width, height: t.height, presentation: t.presentation}
 		if !setup.picker {
 			setup.openForm(provider)
 		}
@@ -573,7 +577,8 @@ func (t *tui) providerView() tea.View {
 	lines := make([]string, height)
 	fit := func(value string) string { return ansi.Truncate(value, width, "") }
 	lines[0] = fit(styleHeading.Render("Providers  /  " + browser.title))
-	rows, room := browser.rows(), max(0, height-6)
+	layout := t.contentLayout(height, browser.editing, 2)
+	rows, room := browser.rows(), layout.room
 	first := max(0, min(browser.selected-room/2, len(rows)-room))
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
@@ -585,34 +590,41 @@ func (t *tui) providerView() tea.View {
 		lines[row+2] = style.Render(fit(prefix + text))
 	}
 	if room > 0 && len(rows) == 0 && !browser.loading {
-		lines[2] = styleDim.Render("  No results. Ctrl+F searches every provider.")
+		lines[2] = styleDim.Render("  No results. " + t.presentation.bindingLabel("provider.global-search") + " searches every provider.")
 	}
-	if height >= 5 {
+	if layout.note >= 0 {
 		note := browser.note
 		if browser.loading {
-			note = browser.loadingText()
+			note = browser.loadingText(t.presentation)
 		} else if note == "" {
 			note = fmt.Sprintf("%d items", len(rows))
 		}
-		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter open/play · q queue · n play next · f favorite · B bookmark · Ctrl+F search " + browser.providerName(browser.searchScope(rows))))
-		filterHint := "/ filter"
-		if browser.page == "home" {
-			filterHint = "/ search selected"
+		if t.presentation.Panels["metadata"] && len(rows) > 0 {
+			note += " · selected: " + browser.rowText(rows[min(browser.selected, len(rows)-1)])
 		}
-		lines[height-2] = fit(styleDim.Render(filterHint + " · [ ] page · Ctrl+R refresh · s setup · Esc back · F8 prompt"))
-		if browser.editing {
+		lines[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			lines[layout.firstHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingHint("browser.select", "open/play"), t.presentation.bindingHint("provider.queue", "queue"), t.presentation.bindingHint("provider.play-next", "play next"), t.presentation.bindingHint("browser.favorite", "favorite"), t.presentation.bindingHint("browser.bookmark", "bookmark"), t.presentation.bindingHint("provider.global-search", "search "+browser.providerName(browser.searchScope(rows)))}, " · ")))
+			filterHint := t.presentation.bindingHint("browser.search", "filter")
+			if browser.page == "home" {
+				filterHint = t.presentation.bindingHint("browser.search", "search selected")
+			}
+			lines[layout.secondHint] = fit(styleDim.Render(strings.Join([]string{filterHint, t.presentation.bindingPairHint("provider.previous-page", "provider.next-page", "page"), t.presentation.bindingHint("browser.refresh", "refresh"), t.presentation.bindingHint("provider.setup", "setup"), t.presentation.bindingHint("browser.back", "back"), t.presentation.bindingHint("global.providers", "prompt")}, " · ")))
+		}
+		if browser.editing && layout.input >= 0 {
 			browser.input.SetWidth(max(1, width-len(browser.input.Prompt)-1))
-			lines[height-2] = fit(browser.input.View())
+			lines[layout.input] = fit(browser.input.View())
 		}
-		lines[height-1] = t.statusBar()
+		if layout.status >= 0 {
+			lines[layout.status] = t.statusBar()
+		}
 	}
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	if browser.editing && height >= 5 {
+	if browser.editing && layout.input >= 0 {
 		if cursor := browser.input.Cursor(); cursor != nil {
-			cursor.Y += height - 2
+			cursor.Y += layout.input
 			view.Cursor = cursor
 		}
 	}

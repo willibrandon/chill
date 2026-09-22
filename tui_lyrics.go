@@ -107,7 +107,7 @@ func (t *tui) lyricsResult(msg lyricsResultMsg) tea.Cmd {
 func (t *tui) lyricsKey(msg tea.KeyPressMsg) tea.Cmd {
 	l := &t.lyrics
 	room := max(1, t.height-6)
-	switch msg.String() {
+	switch t.presentation.mapKey("lyrics", msg.String()) {
 	case "ctrl+q":
 		return tea.Quit
 	case "f6", "esc", "b":
@@ -140,18 +140,23 @@ func (t *tui) lyricsView() tea.View {
 		heading += "  /  " + l.heading
 	}
 	rows[0] = fit(styleHeading.Render(heading))
-	room := max(0, height-5)
+	layout := t.contentLayout(height, false, 1)
+	room := layout.room
 	for i := 0; i < room && l.offset+i < len(l.lines); i++ {
 		rows[i+2] = fit(styleInput.Render("  " + l.lines[l.offset+i]))
 	}
-	if height >= 4 {
+	if layout.note >= 0 {
 		note := l.note
 		if l.loading {
 			note = "Loading lyrics…"
 		}
-		rows[height-3] = fit(styleDim.Render(note))
-		rows[height-2] = fit(styleDim.Render("↑/↓ scroll · PgUp/PgDn page · Ctrl+R refresh · Esc/F6 prompt"))
-		rows[height-1] = t.statusBar()
+		rows[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			rows[layout.firstHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingPairHint("browser.up", "browser.down", "scroll"), t.presentation.bindingPairHint("browser.page-up", "lyrics.page-down", "page"), t.presentation.bindingHint("browser.refresh", "refresh"), t.presentation.bindingHint("browser.back", "prompt"), t.presentation.bindingHint("global.lyrics", "prompt")}, " · ")))
+		}
+		if layout.status >= 0 {
+			rows[layout.status] = t.statusBar()
+		}
 	}
 	v := tea.NewView(strings.Join(rows, "\n"))
 	v.AltScreen = true

@@ -33,6 +33,9 @@ var replCommands = []replCommand{
 	{"setup", "[provider]", "configure a provider securely"},
 	{"link", "[open|register|unregister|status]", "use secure chill:// links"},
 	{"completion", "<shell>", "generate shell completion definitions"},
+	{"theme", "[list|set|preview|validate]", "inspect or change terminal themes (F10)"},
+	{"keys", "[list|search|set|reset]", "inspect or remap terminal keys (Ctrl+K)"},
+	{"interface", "[show|set|panel|reset]", "configure layouts and accessibility"},
 	{"shuffle", "[on|off|toggle]", "control queue shuffle"},
 	{"repeat", "[off|all|one|cycle]", "control queue repeat"},
 	{"favorite", "", "favorite or unfavorite the current item"},
@@ -476,6 +479,12 @@ func execute(input string) (string, error) {
 		return runLinkCommand(context.Background(), parts[1:], false)
 	case "completion":
 		return runCompletionCommand(parts[1:])
+	case "theme":
+		return runThemeCommand(parts[1:], false)
+	case "keys":
+		return runKeysCommand(parts[1:], false)
+	case "interface":
+		return runInterfaceCommand(parts[1:], false)
 	case "shuffle", "repeat":
 		if err := ensureDaemon(); err != nil {
 			return "", err
@@ -661,16 +670,18 @@ func helpWidth() int {
 
 // replHelp lists the REPL commands.
 func replHelp() string {
+	palette := currentCLIPalette()
 	var b strings.Builder
 	for i, c := range replCommands {
-		fmt.Fprintf(&b, "%s%-*s%s  %s%s%s\n", cyan, helpWidth(), helpNames()[i], reset, dim, c.desc, reset)
+		fmt.Fprintf(&b, "%s%-*s%s  %s%s%s\n", palette.cyan, helpWidth(), helpNames()[i], palette.reset, palette.dim, c.desc, palette.reset)
 	}
-	fmt.Fprintf(&b, "%s%-*s%s  %s%s%s", cyan, helpWidth(), "<station>", reset, dim, "same as play <station>", reset)
+	fmt.Fprintf(&b, "%s%-*s%s  %s%s%s", palette.cyan, helpWidth(), "<station>", palette.reset, palette.dim, "same as play <station>", palette.reset)
 	return b.String()
 }
 
 // stationList lists the stations, marking the one that is loaded.
 func stationList() string {
+	palette := currentCLIPalette()
 	current := ""
 	if s, _ := fetchStatus(); s != nil {
 		current = s.Station
@@ -680,9 +691,9 @@ func stationList() string {
 	for _, s := range stationSnapshot() {
 		marker := " "
 		if s.Name == current {
-			marker = pink + "♪" + reset
+			marker = palette.pink + "♪" + palette.reset
 		}
-		lines = append(lines, fmt.Sprintf("%s %s%-16s%s  %s%s%s", marker, cyan, s.Name, reset, dim, s.Desc, reset))
+		lines = append(lines, fmt.Sprintf("%s %s%-16s%s  %s%s%s", marker, palette.cyan, s.Name, palette.reset, palette.dim, s.Desc, palette.reset))
 	}
 	return strings.Join(lines, "\n")
 }

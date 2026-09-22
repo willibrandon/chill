@@ -1301,8 +1301,9 @@ func runDaemon() {
 		go d.syncPodcastInbox()
 	}
 
-	fmt.Println(dim + "chill daemon started" + reset)
-	fmt.Println(dim + "socket: " + socketPath() + reset)
+	palette := currentCLIPalette()
+	fmt.Println(palette.dim + "chill daemon started" + palette.reset)
+	fmt.Println(palette.dim + "socket: " + socketPath() + palette.reset)
 
 	go func() {
 		ticker := time.NewTicker(time.Second)

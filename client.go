@@ -164,6 +164,7 @@ func startDaemon() error {
 
 // clientPlay starts playing the specified station via the daemon.
 func clientPlay(station string) (string, error) {
+	palette := currentCLIPalette()
 	selected := findStation(station)
 	if station == "" {
 		selected = findStation(defaultStation())
@@ -187,7 +188,7 @@ func clientPlay(station string) (string, error) {
 		return "", err
 	}
 
-	return pink + "♪ " + resp + reset, nil
+	return palette.pink + "♪ " + resp + palette.reset, nil
 }
 
 // fetchStatus asks the daemon for its playback state. It returns nil if the
@@ -211,13 +212,14 @@ func fetchStatus() (*Status, error) {
 
 // clientStatus describes the current playback status.
 func clientStatus() (string, error) {
+	palette := currentCLIPalette()
 	s, err := fetchStatus()
 	if err != nil {
 		return "", err
 	}
 
 	if s == nil {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	return strings.Join(statusFacts(s), " │ "), nil
@@ -308,6 +310,7 @@ func statusFacts(s *Status) []string {
 
 // clientToggle pauses if playing, resumes if paused, or starts playing if stopped.
 func clientToggle() (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
 		return clientPlay("")
 	}
@@ -318,15 +321,16 @@ func clientToggle() (string, error) {
 	}
 
 	if resp == "paused" {
-		return dim + "⏸ paused" + reset, nil
+		return palette.dim + "⏸ paused" + palette.reset, nil
 	}
-	return purple + "▶ " + resp + reset, nil
+	return palette.purple + "▶ " + resp + palette.reset, nil
 }
 
 // clientPause pauses playback.
 func clientPause() (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	resp, err := ask("pause")
@@ -334,13 +338,14 @@ func clientPause() (string, error) {
 		return "", err
 	}
 
-	return dim + "⏸ " + resp + reset, nil
+	return palette.dim + "⏸ " + resp + palette.reset, nil
 }
 
 // clientResume resumes paused playback.
 func clientResume() (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	resp, err := ask("resume")
@@ -348,11 +353,12 @@ func clientResume() (string, error) {
 		return "", err
 	}
 
-	return purple + "▶ " + resp + reset, nil
+	return palette.purple + "▶ " + resp + palette.reset, nil
 }
 
 // clientSkip skips to a random different station.
 func clientSkip() (string, error) {
+	palette := currentCLIPalette()
 	stations := stationSnapshot()
 	items := make([]MediaItem, len(stations))
 	for i, station := range stations {
@@ -370,14 +376,15 @@ func clientSkip() (string, error) {
 		return "", err
 	}
 
-	return pink + "♪ " + resp + reset, nil
+	return palette.pink + "♪ " + resp + palette.reset, nil
 }
 
 // clientVolume sets or reports the volume. arg is a number, a step like
 // "+5", "up", "down", or empty to report.
 func clientVolume(arg string) (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	cmd := "vol"
@@ -389,13 +396,14 @@ func clientVolume(arg string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cyan + "♫ " + resp + reset, nil
+	return palette.cyan + "♫ " + resp + palette.reset, nil
 }
 
 // clientEqualizer reports or changes the persistent equalizer. Unlike playback
 // controls, it also works while the daemon is stopped so a curve can be chosen
 // before starting audio.
 func clientEqualizer(arg string) (string, error) {
+	palette := currentCLIPalette()
 	arg = strings.TrimSpace(arg)
 	if strings.EqualFold(arg, "list") {
 		return equalizerPresetList(), nil
@@ -417,7 +425,7 @@ func clientEqualizer(arg string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return cyan + "♫ " + out + reset, nil
+		return palette.cyan + "♫ " + out + palette.reset, nil
 	}
 
 	settings, err := loadPlaybackSettings()
@@ -434,7 +442,7 @@ func clientEqualizer(arg string) (string, error) {
 			return "", fmt.Errorf("saving EQ: %w", err)
 		}
 	}
-	return cyan + "♫ " + formatEqualizer(next) + reset, nil
+	return palette.cyan + "♫ " + formatEqualizer(next) + palette.reset, nil
 }
 
 func clientNotifications(arg string) (string, error) {
@@ -501,15 +509,16 @@ func clientSetEqualizerState(eq equalizerConfig) error {
 
 // clientMute toggles mute without changing the volume.
 func clientMute() (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	resp, err := ask("mute")
 	if err != nil {
 		return "", err
 	}
-	return cyan + "♫ " + resp + reset, nil
+	return palette.cyan + "♫ " + resp + palette.reset, nil
 }
 
 func clientSleep(arg string) (string, error) {
@@ -527,8 +536,9 @@ func clientSleep(arg string) (string, error) {
 
 // clientStop stops playback and terminates the daemon.
 func clientStop() (string, error) {
+	palette := currentCLIPalette()
 	if !isDaemonRunning() {
-		return dim + "not running" + reset, nil
+		return palette.dim + "not running" + palette.reset, nil
 	}
 
 	_, err := sendCommand("stop")
@@ -539,5 +549,5 @@ func clientStop() (string, error) {
 	}
 	// any other error means the daemon exited, that's fine
 
-	return dim + "~ stay chill ~" + reset, nil
+	return palette.dim + "~ stay chill ~" + palette.reset, nil
 }

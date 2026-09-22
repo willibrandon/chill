@@ -13,13 +13,14 @@ import (
 
 // podcastHelp uses the same column formatting as the main CLI help.
 func podcastHelp(colored bool) string {
+	palette := currentCLIPalette()
 	var b strings.Builder
 	usage := "Usage: chill podcasts [command] [--json]"
 	if colored {
-		usage = dim + usage + reset
+		usage = palette.dim + usage + palette.reset
 	}
 	fmt.Fprintln(&b, usage)
-	printStyledHelpSection(&b, "Commands", [][2]string{
+	printStyledHelpSectionWithPalette(&b, "Commands", [][2]string{
 		{"(no command)", "open the podcast browser"},
 		{"<feed-url>", "open a feed in the browser"},
 		{"top [--country us]", "Apple's top 100 shows"},
@@ -43,8 +44,8 @@ func podcastHelp(colored bool) string {
 		{"queue <feed-url> [number]", "add an episode to the queue"},
 		{"queue", "list queued episodes"},
 		{"clear", "clear the queue"},
-	}, colored)
-	printStyledHelpSection(&b, "Options", [][2]string{
+	}, colored, palette)
+	printStyledHelpSectionWithPalette(&b, "Options", [][2]string{
 		{"--json", "print machine-readable results"},
 		{"--restart", "start an episode from the beginning"},
 		{"--fg", "play without the background daemon"},
@@ -56,7 +57,7 @@ func podcastHelp(colored bool) string {
 		{"--retain <days>", "days to keep played downloads (0 keeps them)"},
 		{"--country <code>", "use this country for top shows"},
 		{"--help", "show this help"},
-	}, colored)
+	}, colored, palette)
 	footer := `
 Playback: chill seek -30 | chill seek +30 | chill speed 1.5
           chill next | chill prev | chill --toggle | chill --stop
@@ -67,7 +68,7 @@ Browser: Enter open/play · f subscribe · / search or RSS URL
 		lines := strings.Split(footer, "\n")
 		for i, line := range lines {
 			if line != "" {
-				lines[i] = dim + line + reset
+				lines[i] = palette.dim + line + palette.reset
 			}
 		}
 		footer = strings.Join(lines, "\n")

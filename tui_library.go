@@ -38,6 +38,7 @@ type libraryResultMsg struct {
 	items     []MediaItem
 	files     []os.DirEntry
 	cwd, note string
+	reload    bool
 	err       error
 }
 
@@ -209,10 +210,10 @@ func (b *libraryBrowser) rowText(i int) string {
 	}
 }
 
-func (t *tui) libraryNavigate(page, title string) tea.Cmd {
+func (t *tui) libraryNavigate(page, title, note string) tea.Cmd {
 	b := &t.libraryUI
 	b.back = append(b.back, libraryPage{b.page, b.title, b.cwd, b.playlist, b.selected})
-	b.page, b.title, b.selected, b.filter, b.note = page, title, 0, "", ""
+	b.page, b.title, b.selected, b.filter, b.note = page, title, 0, "", note
 	return t.loadLibraryPage()
 }
 
@@ -221,13 +222,21 @@ func (t *tui) librarySelect(index int) tea.Cmd {
 	switch b.page {
 	case "home":
 		pages := [][2]string{{"queue", "Queue"}, {"next", "Play Next"}, {"playlists", "Saved Playlists"}, {"files", "Browse Files"}, {"favorites", "Favorites"}, {"bookmarks", "Bookmarks"}, {"recent", "Recently Played"}}
-		return t.libraryNavigate(pages[index][0], pages[index][1])
+		note := ""
+		if pages[index][0] == "files" && b.cwd == "" {
+			b.cwd = resolveInitialDirectory(t.presentation.InitialDirectory)
+			if info, err := os.Stat(b.cwd); err != nil || !info.IsDir() {
+				b.cwd, _ = os.UserHomeDir()
+				note = "Initial browser directory is unavailable; opened home"
+			}
+		}
+		return t.libraryNavigate(pages[index][0], pages[index][1], note)
 	case "playlists":
 		name := playlistNames(b.state)[index]
 		p := b.state.Playlists[playlistKey(name)]
 		b.playlist = name
 		b.items = cloneItems(p.Items)
-		return t.libraryNavigate("playlist", p.Name)
+		return t.libraryNavigate("playlist", p.Name, "")
 	case "files":
 		path := filepath.Dir(b.cwd)
 		if index > 0 {
@@ -248,7 +257,7 @@ func (t *tui) librarySelect(index int) tea.Cmd {
 			if err == nil {
 				_, err = playMediaItems(items)
 			}
-			return libraryResultMsg{id: b.id, note: "loading: " + filepath.Base(path), err: err, state: b.state, files: b.files, cwd: b.cwd}
+			return libraryResultMsg{id: b.id, note: "loading: " + filepath.Base(path), reload: true, err: err, state: b.state, files: b.files, cwd: b.cwd}
 		}
 	default:
 		if index >= len(b.items) {
@@ -267,7 +276,7 @@ func (t *tui) librarySelect(index int) tea.Cmd {
 		item := b.items[index]
 		return func() tea.Msg {
 			out, err := playMedia(item, false)
-			return libraryResultMsg{id: b.id, note: out, err: err, state: b.state, items: b.items, cwd: b.cwd, files: b.files}
+			return libraryResultMsg{id: b.id, note: out, reload: true, err: err, state: b.state, items: b.items, cwd: b.cwd, files: b.files}
 		}
 	}
 }
@@ -275,14 +284,8 @@ func (t *tui) librarySelect(index int) tea.Cmd {
 func (t *tui) libraryKey(msg tea.KeyPressMsg) tea.Cmd {
 	b := &t.libraryUI
 	key := msg.String()
-	if key == "ctrl+q" {
-		return tea.Quit
-	}
-	if key == "f7" {
-		t.closeLibrary()
-		return nil
-	}
 	if b.editing {
+		key = t.presentation.mapKey("editor", key)
 		switch key {
 		case "esc", "ctrl+c":
 			b.editing = false
@@ -314,6 +317,7 @@ func (t *tui) libraryKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	key = t.presentation.mapKey("library", key)
 	rows := b.rows()
 	switch key {
 	case "esc", "b":
@@ -388,6 +392,15 @@ func (t *tui) libraryKey(msg tea.KeyPressMsg) tea.Cmd {
 			b.input.SetValue(b.playlist)
 			return b.input.Focus()
 		}
+		if err := ensureDaemon(); err != nil {
+			b.note = err.Error()
+			return nil
+		}
+		return func() tea.Msg {
+			out, err := ask("repeat cycle")
+			return libraryResultMsg{id: b.id, note: out, err: err}
+		}
+	case "R":
 		if err := ensureDaemon(); err != nil {
 			b.note = err.Error()
 			return nil
@@ -493,7 +506,7 @@ func (t *tui) libraryKey(msg tea.KeyPressMsg) tea.Cmd {
 				if err == nil {
 					out, err = sendItems(action, items)
 				}
-				return libraryResultMsg{id: b.id, note: out, err: err, state: b.state, files: b.files, cwd: b.cwd}
+				return libraryResultMsg{id: b.id, note: out, reload: true, err: err, state: b.state, files: b.files, cwd: b.cwd}
 			}
 		}
 	case "d":
@@ -520,7 +533,8 @@ func (t *tui) libraryView() tea.View {
 	}
 	lines[0] = fit(styleHeading.Render(heading))
 	rows := b.rows()
-	room := max(0, height-6)
+	layout := t.contentLayout(height, b.editing, 2)
+	room := layout.room
 	first := max(0, min(b.selected-room/2, len(rows)-room))
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
@@ -531,7 +545,7 @@ func (t *tui) libraryView() tea.View {
 		}
 		lines[row+2] = style.Render(fit(prefix + text))
 	}
-	if height >= 5 {
+	if layout.note >= 0 {
 		note := b.note
 		if b.loading {
 			note = "Loading…"
@@ -541,21 +555,28 @@ func (t *tui) libraryView() tea.View {
 				note += " · filter: " + b.filter
 			}
 		}
-		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter open/play · a append · n play next · x remove · J/K move · f favorite · B bookmark"))
-		lines[height-2] = fit(styleDim.Render("/ filter · w save queue · z shuffle · r repeat/rename · u undo · d delete · Esc back · F7 prompt"))
-		if b.editing {
-			b.input.SetWidth(max(1, width-len(b.input.Prompt)-1))
-			lines[height-2] = fit(b.input.View())
+		if t.presentation.Panels["metadata"] && len(rows) > 0 {
+			note += " · selected: " + b.rowText(rows[min(b.selected, len(rows)-1)])
 		}
-		lines[height-1] = t.statusBar()
+		lines[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			lines[layout.firstHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingHint("browser.select", "open/play"), t.presentation.bindingHint("browser.append", "append"), t.presentation.bindingHint("browser.play-next", "play next"), t.presentation.bindingHint("browser.remove", "remove"), t.presentation.bindingHint("library.move-down", "move"), t.presentation.bindingHint("browser.favorite", "favorite"), t.presentation.bindingHint("browser.bookmark", "bookmark")}, " · ")))
+			lines[layout.secondHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingHint("browser.search", "filter"), t.presentation.bindingHint("library.save", "save queue"), t.presentation.bindingHint("browser.shuffle", "shuffle"), t.presentation.bindingHint("library.repeat-rename", "repeat/rename"), t.presentation.bindingHint("browser.undo", "undo"), t.presentation.bindingHint("library.delete", "delete"), t.presentation.bindingHint("browser.back", "back"), t.presentation.bindingHint("global.library", "prompt")}, " · ")))
+		}
+		if b.editing && layout.input >= 0 {
+			b.input.SetWidth(max(1, width-len(b.input.Prompt)-1))
+			lines[layout.input] = fit(b.input.View())
+		}
+		if layout.status >= 0 {
+			lines[layout.status] = t.statusBar()
+		}
 	}
 	v := tea.NewView(strings.Join(lines, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	if b.editing && height >= 5 {
+	if b.editing && layout.input >= 0 {
 		if c := b.input.Cursor(); c != nil {
-			c.Y += height - 2
+			c.Y += layout.input
 			v.Cursor = c
 		}
 	}
@@ -565,7 +586,7 @@ func (t *tui) libraryView() tea.View {
 func runReplLibrary() {
 	model := newTUI()
 	model.libraryStart = true
-	_, err := tea.NewProgram(model).Run()
+	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -40,7 +40,8 @@ func runLyricsCommand(ctx context.Context, args []string, colored bool) (string,
 		case "--help", "-h", "help":
 			text := "Usage: chill lyrics [--json]"
 			if colored {
-				text = dim + text + reset
+				palette := currentCLIPalette()
+				text = palette.dim + text + palette.reset
 			}
 			return text, nil
 		default:

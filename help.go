@@ -37,6 +37,9 @@ With no arguments, chill opens the interactive REPL.
 		{"setup [provider]", "configure a provider with protected credentials"},
 		{"link [command]", "open or register secure chill:// links"},
 		{"completion <shell>", "generate Bash, Zsh, Fish, or PowerShell completion"},
+		{"theme [command]", "list, preview, validate, or select terminal themes"},
+		{"keys [command]", "list, search, remap, or reset terminal bindings"},
+		{"interface [command]", "configure layouts, panels, status, and accessibility"},
 		{"shuffle [on|off]", "control source-neutral queue shuffle"},
 		{"repeat [off|all|one]", "control source-neutral queue repeat"},
 		{"pause / resume / toggle / stop", "control current playback"},
@@ -94,6 +97,9 @@ With no arguments, chill opens the interactive REPL.
 		{"chill search ambient --queue all", "append every search result"},
 		{"chill link register", "register chill:// links for this user"},
 		{"chill completion zsh", "print Zsh completion definitions"},
+		{"chill theme set 'High Contrast'", "select a contrast-tested theme"},
+		{"chill keys set global.library ctrl+g", "remap a scoped action"},
+		{"chill --theme Paper --simplified", "use session-only presentation overrides"},
 		{"chill history --limit 20", "show recently heard live tracks"},
 		{"chill notifications on", "enable track-change notifications"},
 		{"chill --vol +5", "raise the volume"},
@@ -118,9 +124,14 @@ func printHelpSection(out io.Writer, title string, rows [][2]string) {
 
 // printStyledHelpSection measures plain labels before adding REPL colors.
 func printStyledHelpSection(out io.Writer, title string, rows [][2]string, colored bool) {
+	palette := currentCLIPalette()
+	printStyledHelpSectionWithPalette(out, title, rows, colored, palette)
+}
+
+func printStyledHelpSectionWithPalette(out io.Writer, title string, rows [][2]string, colored bool, palette cliPalette) {
 	heading := title + ":"
 	if colored {
-		heading = cyan + heading + reset
+		heading = palette.cyan + heading + palette.reset
 	}
 	fmt.Fprintf(out, "\n%s\n", heading)
 	width := 0
@@ -129,7 +140,7 @@ func printStyledHelpSection(out io.Writer, title string, rows [][2]string, color
 	}
 	for _, row := range rows {
 		if colored {
-			fmt.Fprintf(out, "  %s%-*s%s  %s%s%s\n", cyan, width, row[0], reset, dim, row[1], reset)
+			fmt.Fprintf(out, "  %s%-*s%s  %s%s%s\n", palette.cyan, width, row[0], palette.reset, palette.dim, row[1], palette.reset)
 		} else {
 			fmt.Fprintf(out, "  %-*s  %s\n", width, row[0], row[1])
 		}

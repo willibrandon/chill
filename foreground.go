@@ -57,6 +57,7 @@ type foregroundModel struct {
 	library        *libraryState
 	stationHistory []Station
 	stationForward []Station
+	presentation   interfaceSettings
 }
 
 func startForegroundPCM(station *Station, settings playbackSettings, muted, paused bool, offset time.Duration) (*pcmPlayer, error) {
@@ -82,11 +83,15 @@ func waitForegroundPlayer(p *pcmPlayer, generation uint64) tea.Cmd {
 
 // Init waits for the foreground PCM pipeline to become audible.
 func (m *foregroundModel) Init() tea.Cmd {
-	return tea.Batch(waitForegroundPlayer(m.player, m.generation), foregroundMediaTick())
+	return tea.Batch(waitForegroundPlayer(m.player, m.generation), foregroundMediaTick(effectiveInterfaceSettings(m.presentation).LowPower))
 }
 
-func foregroundMediaTick() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return foregroundMediaTickMsg{} })
+func foregroundMediaTick(lowPower ...bool) tea.Cmd {
+	interval := time.Second
+	if len(lowPower) > 0 && lowPower[0] {
+		interval = 3 * time.Second
+	}
+	return tea.Tick(interval, func(time.Time) tea.Msg { return foregroundMediaTickMsg{} })
 }
 
 func (m *foregroundModel) mediaState() media.State {
@@ -298,7 +303,7 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForegroundPlayer(m.player, m.generation)
 	case foregroundMediaTickMsg:
 		m.updateMedia()
-		return m, foregroundMediaTick()
+		return m, foregroundMediaTick(effectiveInterfaceSettings(m.presentation).LowPower)
 	case media.Command:
 		switch msg.Kind {
 		case media.Toggle:
@@ -355,9 +360,10 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.lyricsLines = []string{"Instrumental"}
 		}
 	case tea.KeyPressMsg:
+		presentation := effectiveInterfaceSettings(m.presentation)
 		if m.lyricsOpen {
 			room := max(1, m.height-6)
-			switch msg.String() {
+			switch presentation.mapKey("foreground-lyrics", msg.String()) {
 			case "q", "ctrl+c":
 				return m, tea.Quit
 			case "y", "esc":
@@ -375,7 +381,8 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		switch msg.String() {
+		keyName := presentation.mapKey("playback", msg.String())
+		switch keyName {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "space":
@@ -399,7 +406,7 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.loadLyrics()
 		case "f", "B":
 			if m.library != nil {
-				bookmark, label := msg.String() == "B", "favorite"
+				bookmark, label := keyName == "B", "favorite"
 				if bookmark {
 					label = "bookmark"
 				}
@@ -417,16 +424,24 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "0":
 			m.setVolume(m.settings.Volume + 5)
 		case "left":
-			return m, m.restartAt(m.player.position() - 5*time.Second)
+			return m, m.restartAt(m.player.position() - time.Duration(presentation.SeekStep)*time.Second)
 		case "right":
-			return m, m.restartAt(m.player.position() + 5*time.Second)
+			return m, m.restartAt(m.player.position() + time.Duration(presentation.SeekStep)*time.Second)
+		case "shift+left":
+			return m, m.restartAt(m.player.position() - time.Duration(presentation.SeekLargeStep)*time.Second)
+		case "shift+right":
+			return m, m.restartAt(m.player.position() + time.Duration(presentation.SeekLargeStep)*time.Second)
+		case ">", ".":
+			return m, m.nextStation()
+		case "<", ",":
+			return m, m.previousStation()
 		case "h":
 			m.eqCursor = max(0, m.eqCursor-1)
 		case "l":
 			m.eqCursor = min(audio.EqualizerBandCount-1, m.eqCursor+1)
 		case "k", "j", "x":
 			bands := m.eq.activeBands()
-			switch msg.String() {
+			switch keyName {
 			case "k":
 				bands[m.eqCursor]++
 			case "j":
@@ -462,8 +477,11 @@ func foregroundLine(text string, width int, style lipgloss.Style) string {
 func (m *foregroundModel) View() tea.View {
 	var view tea.View
 	view.AltScreen = true
+	presentation := effectiveInterfaceSettings(m.presentation)
+	tier := interfaceLayoutTier(m.width, m.height, false, presentation.Simplified)
+	minimal := tier == "minimal" || tier == "too-small"
 	if m.width == 0 {
-		return view
+		return presentation.decorateView(view, m.width)
 	}
 	if m.lyricsOpen {
 		lines := []string{
@@ -475,8 +493,10 @@ func (m *foregroundModel) View() tea.View {
 		for i := 0; i < room && m.lyricsOffset+i < len(m.lyricsLines); i++ {
 			lines = append(lines, foregroundLine("  "+m.lyricsLines[m.lyricsOffset+i], m.width, styleInput))
 		}
-		for len(lines) < max(3, m.height-3) {
-			lines = append(lines, "")
+		if !presentation.Simplified {
+			for len(lines) < max(3, m.height-3) {
+				lines = append(lines, "")
+			}
 		}
 		note := "live streams use manual scrolling"
 		if m.lyricsLoading {
@@ -485,12 +505,16 @@ func (m *foregroundModel) View() tea.View {
 		if m.err != "" {
 			note = "error: " + m.err
 		}
-		lines = append(lines, foregroundLine(note, m.width, styleDim), foregroundLine("↑/↓ scroll · PgUp/PgDn page · r refresh · y/Esc back · q quit", m.width, styleDim))
+		lines = append(lines, foregroundLine(note, m.width, styleDim))
+		if presentation.ShowHelp {
+			hints := []string{presentation.bindingHint("foreground-lyrics.down", "scroll"), presentation.bindingHint("foreground-lyrics.page-down", "page"), presentation.bindingHint("foreground-lyrics.refresh", "refresh"), presentation.bindingHint("foreground-lyrics.close", "back"), presentation.bindingHint("foreground-lyrics.quit", "quit")}
+			lines = append(lines, foregroundLine(strings.Join(hints, " · "), m.width, styleDim))
+		}
 		if m.height > 0 {
 			lines = lines[:min(len(lines), m.height)]
 		}
 		view.SetContent(strings.Join(lines, "\n"))
-		return view
+		return presentation.decorateView(view, m.width)
 	}
 	bands := m.eq.activeBands()
 	curve := make([]string, audio.EqualizerBandCount)
@@ -501,17 +525,33 @@ func (m *foregroundModel) View() tea.View {
 		}
 		curve[i] = value
 	}
-	muted := ""
-	if m.muted {
-		muted = " · muted"
-	}
 	lines := []string{
 		foregroundLine("chill · foreground", m.width, styleHeading),
 		foregroundLine("♪ "+m.station.Desc, m.width, styleSelected),
-		foregroundLine("~ "+m.vibe+" ~", m.width, styleDim),
-		"",
-		foregroundLine(fmt.Sprintf("%s · %s · vol %d%s", m.state, clock(m.player.position().Seconds()), m.settings.Volume, muted), m.width, styleInput),
-		foregroundLine("EQ ["+m.eq.Preset+"]  "+strings.Join(curve, "  ")+" dB", m.width, styleCommand),
+	}
+	if !minimal {
+		lines = append(lines, foregroundLine("~ "+m.vibe+" ~", m.width, styleDim))
+	}
+	if presentation.ShowStatus {
+		mutedStatus := ""
+		if m.muted {
+			mutedStatus = "muted"
+		}
+		title := m.station.Desc
+		if m.nowPlaying != "" {
+			title = m.nowPlaying
+		}
+		status := orderedInterfaceStatus(presentation, map[string]string{
+			"state": m.state, "position": clock(m.player.position().Seconds()), "title": title,
+			"volume": fmt.Sprintf("vol %d", m.settings.Volume), "muted": mutedStatus, "equalizer": "eq " + m.eq.Preset,
+			"network": m.state, "audio": m.settings.Audio.status(m.settings.Audio.Device).Format,
+		})
+		if status != "" {
+			lines = append(lines, "", foregroundLine(status, m.width, styleInput))
+		}
+	}
+	if !minimal {
+		lines = append(lines, foregroundLine("EQ ["+m.eq.Preset+"]  "+strings.Join(curve, "  ")+" dB", m.width, styleCommand))
 	}
 	if m.nowPlaying != "" {
 		lines = append(lines[:2], append([]string{foregroundLine("♫ "+m.nowPlaying, m.width, styleCommand)}, lines[2:]...)...)
@@ -519,16 +559,32 @@ func (m *foregroundModel) View() tea.View {
 	if m.err != "" {
 		lines = append(lines, foregroundLine("error: "+m.err, m.width, styleError))
 	}
-	lines = append(lines, "", foregroundLine("q quit · Space pause · m mute · y lyrics · f favorite · B bookmark · 9/0 volume · ←/→ seek", m.width, styleDim))
-	lines = append(lines, foregroundLine("h/l band · j/k gain · x zero · e/E preset · r flat · c custom", m.width, styleDim))
+	metadata := m.station.Desc
+	if m.nowPlaying != "" {
+		metadata = m.nowPlaying
+	}
+	lines = append(lines, foregroundPanelLines(presentation, m.width, m.height, map[string]string{
+		"source": "radio · " + m.station.Name, "queue": "live stream", "equalizer": m.eq.Preset,
+		"audio": m.settings.Audio.status(m.settings.Audio.Device).Format, "network": m.state, "metadata": metadata,
+	})...)
+	if presentation.ShowHelp {
+		hints := []string{presentation.bindingHint("playback.quit", "quit"), presentation.bindingHint("playback.pause", "pause"), presentation.bindingHint("playback.mute", "mute"), presentation.bindingHint("playback.lyrics", "lyrics"), presentation.bindingHint("playback.favorite", "favorite"), presentation.bindingHint("playback.bookmark", "bookmark"), presentation.bindingPairHint("playback.volume-down", "playback.volume-up", "volume"), presentation.bindingPairHint("playback.seek-back", "playback.seek-forward", "seek"), presentation.bindingPairHint("playback.previous", "playback.next", "previous/next")}
+		lines = append(lines, "", foregroundLine(strings.Join(hints, " · "), m.width, styleDim))
+		if !minimal {
+			hints = []string{presentation.bindingPairHint("playback.eq-left", "playback.eq-right", "band"), presentation.bindingPairHint("playback.eq-lower", "playback.eq-raise", "gain"), presentation.bindingHint("playback.eq-zero", "zero"), presentation.bindingPairHint("playback.eq-next", "playback.eq-previous", "preset"), presentation.bindingHint("playback.eq-flat", "flat"), presentation.bindingHint("playback.eq-custom", "custom")}
+			lines = append(lines, foregroundLine(strings.Join(hints, " · "), m.width, styleDim))
+		}
+	}
 	if m.height > 0 {
 		lines = lines[:min(len(lines), m.height)]
-		for len(lines) < m.height {
-			lines = append(lines, "")
+		if !presentation.Simplified {
+			for len(lines) < m.height {
+				lines = append(lines, "")
+			}
 		}
 	}
 	view.SetContent(strings.Join(lines, "\n"))
-	return view
+	return presentation.decorateView(view, m.width)
 }
 
 func (m *foregroundModel) close() {
@@ -558,9 +614,9 @@ func runForeground(station *Station) error {
 	}
 	model := &foregroundModel{
 		station: station, player: p, settings: settings, eq: settings.equalizer(),
-		state: "loading", vibe: vibes[randInt(len(vibes))], library: library,
+		state: "loading", vibe: vibes[randInt(len(vibes))], library: library, presentation: currentInterfaceSettings(),
 	}
-	program := tea.NewProgram(model)
+	program := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...)
 	mediaService, mediaErr := media.New(func(command media.Command) { program.Send(command) })
 	if mediaErr != nil {
 		model.err = "media controls: " + mediaErr.Error()
