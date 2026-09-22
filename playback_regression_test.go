@@ -462,6 +462,11 @@ func init() {
 			fmt.Fprintln(os.Stderr, "extractor did not receive configured FFmpeg")
 			os.Exit(1)
 		}
+		at = slices.Index(os.Args[1:], "--downloader-args") + 1
+		if at < 1 || at+1 >= len(os.Args) || os.Args[at+1] != "ffmpeg_i:-rw_timeout 15000000" {
+			fmt.Fprintln(os.Stderr, "extractor downloader has no idle-read timeout")
+			os.Exit(1)
+		}
 		fmt.Fprint(os.Stdout, "configured FFmpeg reached extractor")
 		os.Exit(0)
 	}

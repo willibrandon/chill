@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -311,31 +312,128 @@ func TestToolSettingsValidation(t *testing.T) {
 // TestSourceCancellationStopsHTTPRead verifies a stalled native source can be stopped.
 func TestSourceCancellationStopsHTTPRead(t *testing.T) {
 	withConfigDir(t)
-	ready := make(chan struct{})
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(toolsPath(), ToolSettings{FFmpeg: exe}); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"", "I", "ID", "ID3"} {
+		t.Run(fmt.Sprintf("prefix-%d", len(prefix)), func(t *testing.T) {
+			ready := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, prefix)
+				w.(http.Flusher).Flush()
+				close(ready)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				r, _, err := openPCM(ctx, server.URL, 0, false, defaultAudioSettings(), func(string) {})
+				if r != nil {
+					r.Close()
+				}
+				done <- err
+			}()
+			<-ready
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled source returned %v, want context.Canceled", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("source cancellation hung")
+			}
+		})
+	}
+}
+
+// TestPCMProcessRejectsCanceledStart prevents fallback helpers from launching
+// when source initialization was already canceled.
+func TestPCMProcessRejectsCanceledStart(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	cmd := exec.Command(exe, "-test.run=^TestPCMProcessHelper$")
+	var diagnostics tailBuffer
+	reader, err := startPCMProcess(ctx, cmd, nil, &diagnostics)
+	if reader != nil {
+		reader.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled process startup returned %v", err)
+	}
+	if cmd.Process != nil {
+		t.Fatal("canceled process was started")
+	}
+}
+
+// TestSourceCancellationDuringSniffRejectsFallback cancels from an ICY callback
+// inside the header read, before enough bytes exist to identify a native codec.
+func TestSourceCancellationDuringSniffRejectsFallback(t *testing.T) {
+	withConfigDir(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(toolsPath(), ToolSettings{FFmpeg: exe}); err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "ID3")
+		w.Header().Set("icy-metaint", "1")
+		block := make([]byte, 34)
+		block[0], block[1] = 'I', 2
+		copy(block[2:], "StreamTitle='cancel';")
+		w.Write(block)
 		w.(http.Flusher).Flush()
-		close(ready)
 		<-r.Context().Done()
 	}))
 	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	called := false
+	r, _, err := openPCM(ctx, server.URL, 0, false, defaultAudioSettings(), func(string) {
+		called = true
+		cancel()
+	})
+	if r != nil {
+		r.Close()
+	}
+	if !called {
+		t.Fatal("did not cancel inside the header read")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled format sniff returned %v", err)
+	}
+}
+
+// TestSourceCancellationDuringNativeInitialization rejects a decoded reader when
+// a metadata callback cancels playback before initialization returns.
+func TestSourceCancellationDuringNativeInitialization(t *testing.T) {
+	withConfigDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		r, _, err := openPCM(ctx, server.URL, 0, false, defaultAudioSettings(), func(string) {})
-		if r != nil {
-			r.Close()
-		}
-		done <- err
-	}()
-	<-ready
-	cancel()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("cancelled source succeeded")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("source cancellation hung")
+	defer cancel()
+	called := false
+	r, _, err := openPCM(ctx, "testdata/audio/tone.mp3", 0, true, defaultAudioSettings(), func(string) {
+		called = true
+		cancel()
+	})
+	if r != nil {
+		r.Close()
+		t.Error("canceled native initialization returned a reader")
+	}
+	if !called {
+		t.Fatal("did not cancel during native initialization")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled native initialization returned %v", err)
 	}
 }
