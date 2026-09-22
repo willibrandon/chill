@@ -27,7 +27,7 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 	if command == nil || !model.running {
 		t.Fatal("doctor was not dispatched as a background command")
 	}
-	if strings.Contains(strings.Join(model.lines, "\n"), "[FAIL]") {
+	if strings.Contains(strings.Join(transcriptLines(model), "\n"), "[FAIL]") {
 		t.Fatal("doctor ran during submit instead of through the asynchronous command")
 	}
 	// The prompt remains editable while a diagnostic command is in flight.
@@ -44,7 +44,7 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 			break
 		}
 	}
-	transcript := ansi.Strip(strings.Join(model.lines, "\n"))
+	transcript := ansi.Strip(strings.Join(transcriptLines(model), "\n"))
 	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[WARN] ffprobe", "[WARN] chill links", "no daemon running", "failed: 0."} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q: %s", want, transcript)
@@ -132,7 +132,7 @@ func TestTUISpinnerAppearsBesideSubmittedCommand(t *testing.T) {
 	if !model.sel.active || model.selectedText() != echo {
 		t.Fatal("animation changed the selection or copied text")
 	}
-	for _, line := range append(append([]string(nil), model.lines...), model.rows...) {
+	for _, line := range append(transcriptLines(model), model.rows...) {
 		if strings.ContainsAny(line, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
 			t.Fatal("animation frames were stored in the transcript")
 		}
@@ -208,7 +208,7 @@ func TestTUIStreamingCancellationAndNextCommand(t *testing.T) {
 		}
 		model.update(msg)
 	}
-	transcript := strings.Join(model.lines, "\n")
+	transcript := strings.Join(transcriptLines(model), "\n")
 	if !model.running || !strings.Contains(transcript, "second finding") {
 		t.Fatal("diagnostics were buffered until completion or chunks lost their line boundaries")
 	}
@@ -230,13 +230,13 @@ func TestTUIStreamingCancellationAndNextCommand(t *testing.T) {
 		t.Fatal("command finished before cleanup")
 	}
 	model.update(msg)
-	if model.running || model.task != nil || !strings.Contains(strings.Join(model.lines, "\n"), "cancelled") {
+	if model.running || model.task != nil || !strings.Contains(strings.Join(transcriptLines(model), "\n"), "cancelled") {
 		t.Fatal("cancellation left the prompt busy")
 	}
 	model.start("help")
 	model.update(outputMsg{id: task.id, line: "stale output"})
 	model.update(resultMsg{id: task.id, err: context.Canceled})
-	if !model.running || model.active != "help" || strings.Contains(strings.Join(model.lines, "\n"), "stale output") {
+	if !model.running || model.active != "help" || strings.Contains(strings.Join(transcriptLines(model), "\n"), "stale output") {
 		t.Fatal("old messages changed the next command")
 	}
 	model.update(run("help", model.commandID)())

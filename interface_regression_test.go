@@ -132,9 +132,9 @@ func TestReleasedGlobalAndOverlayBindings(t *testing.T) {
 	}
 	model := newTUI()
 	model.presentation = settings
-	model.lines = append(model.lines, "sentinel")
+	model.print("sentinel")
 	model.update(tea.KeyPressMsg{Code: tea.KeyF7})
-	if strings.Contains(strings.Join(model.lines, "\n"), "sentinel") {
+	if strings.Contains(strings.Join(transcriptLines(model), "\n"), "sentinel") {
 		t.Fatal("released global F7 swallowed the prompt replacement")
 	}
 
@@ -368,7 +368,7 @@ func TestAppearanceCancelRestoresVisualizerState(t *testing.T) {
 	if count := strings.Count(ansi.Strip(model.appearanceView().Content), warning); count != 1 {
 		t.Fatalf("simplified preview rendered its warning %d times", count)
 	}
-	if strings.Contains(ansi.Strip(strings.Join(model.lines, "\n")), warning) {
+	if strings.Contains(ansi.Strip(strings.Join(transcriptLines(model), "\n")), warning) {
 		t.Fatal("simplified warning was stored in the transcript")
 	}
 	model.adjustAppearance(1)
@@ -417,7 +417,6 @@ func TestModeWarningReservesTranscriptRow(t *testing.T) {
 	model.enforcePresentationMode()
 	model.fit()
 	model.lines, model.rows = nil, nil
-	model.print(styleDim.Render(model.interfaceBanner()))
 	for range 20 {
 		model.print("  older output")
 	}
@@ -435,18 +434,21 @@ func TestModeWarningReservesTranscriptRow(t *testing.T) {
 // TestModeWarningIsNotTranscriptContent keeps mouse selection aligned.
 func TestModeWarningIsNotTranscriptContent(t *testing.T) {
 	model := newTUI()
+	model.width, model.height = 60, 16
 	model.modeNote = "visualizer disabled in low-power mode"
-	model.rows = []string{"banner", "first", "second"}
+	model.rows = []string{"first", "second", "third"}
 	model.viewport.SetWidth(20)
 	model.viewport.SetHeight(3)
 	model.redraw()
 	model.viewport.SetYOffset(0)
 
-	if _, ok := model.cellAt(0, 1); ok {
-		t.Fatal("mode warning mapped to transcript content")
+	for y := range model.headerHeight() {
+		if _, ok := model.cellAt(0, y); ok {
+			t.Fatal("header or mode warning mapped to transcript content")
+		}
 	}
-	point, ok := model.cellAt(0, 2)
-	if !ok || point.row != 1 {
+	point, ok := model.cellAt(0, model.headerHeight())
+	if !ok || point.row != 0 {
 		t.Fatalf("first row below warning mapped to %+v, %v", point, ok)
 	}
 	point, ok = model.cellAt(0, model.transcriptHeight()-1)
@@ -476,11 +478,10 @@ func TestBannerRefreshPreservesTranscriptPosition(t *testing.T) {
 		model.presentation.ShowHelp = false
 		model.modeNote = ""
 		model.width, model.height = 72, 10
-		model.lines = []string{styleDim.Render(model.interfaceBanner())}
 		for range 30 {
-			model.lines = append(model.lines, "  transcript output")
+			model.print("  transcript output")
 		}
-		model.lines = append(model.lines, "  latest result")
+		model.print("  latest result")
 		model.wrap()
 		model.fit()
 		return model
@@ -490,7 +491,6 @@ func TestBannerRefreshPreservesTranscriptPosition(t *testing.T) {
 		model := newModel()
 		model.viewport.GotoBottom()
 		model.presentation.ShowHelp = true
-		model.refreshInterfaceBanner()
 		model.fit()
 		if !model.viewport.AtBottom() {
 			t.Fatal("banner refresh stopped following the transcript")
@@ -503,11 +503,10 @@ func TestBannerRefreshPreservesTranscriptPosition(t *testing.T) {
 	t.Run("scrolled", func(t *testing.T) {
 		model := newModel()
 		model.viewport.SetYOffset(5)
-		before := ansi.Strip(strings.Split(model.transcriptView(), "\n")[0])
+		before := ansi.Strip(strings.Split(model.transcriptView(), "\n")[model.headerHeight()])
 		model.presentation.ShowHelp = true
-		model.refreshInterfaceBanner()
 		model.fit()
-		after := ansi.Strip(strings.Split(model.transcriptView(), "\n")[0])
+		after := ansi.Strip(strings.Split(model.transcriptView(), "\n")[model.headerHeight()])
 		if after != before {
 			t.Fatalf("banner refresh moved scroll anchor from %q to %q", before, after)
 		}
@@ -543,7 +542,7 @@ func TestSavedSimplifiedModeWarningLifecycle(t *testing.T) {
 	if !strings.Contains(ansi.Strip(model.transcriptView()), warning) {
 		t.Fatal("saved simplified mode did not show its warning at the prompt")
 	}
-	if strings.Contains(ansi.Strip(strings.Join(model.lines, "\n")), warning) {
+	if strings.Contains(ansi.Strip(strings.Join(transcriptLines(model), "\n")), warning) {
 		t.Fatal("saved simplified warning entered the transcript")
 	}
 	restarted := newTUI()
@@ -559,7 +558,7 @@ func TestSavedSimplifiedModeWarningLifecycle(t *testing.T) {
 	if strings.Contains(ansi.Strip(model.transcriptView()), warning) {
 		t.Fatal("saved simplified-off mode retained its warning at the prompt")
 	}
-	if banner := ansi.Strip(strings.Join(model.rows, "\n")); !strings.Contains(banner, "F2 visualizer") {
+	if banner := ansi.Strip(strings.Join(model.replHeader(), "\n")); !strings.Contains(banner, "F2 visualizer") {
 		t.Fatalf("saved simplified-off mode retained its reduced banner: %q", banner)
 	}
 	loaded, err := loadInterfaceSettings()

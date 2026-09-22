@@ -1,6 +1,5 @@
-// tui.go implements the fullscreen REPL: a transcript that fills the screen,
-// and pinned under it a rule, the suggestions for what is being typed, the
-// prompt, and a status bar.
+// tui.go implements the fullscreen REPL: a scrolling transcript between a
+// fixed welcome header and the suggestions, prompt, and status bar below it.
 
 package main
 
@@ -56,18 +55,19 @@ type statusMsg struct {
 
 // resultMsg carries the outcome of a finished command.
 type resultMsg struct {
-	id  uint64
-	out string
-	err error
+	id    uint64
+	out   string
+	lines []transcriptLine
+	err   error
 }
 
 // tui is the bubbletea model for the REPL.
 type tui struct {
 	width, height int
 
-	lines    []string       // transcript, one entry per line
-	rows     []string       // the lines wrapped to the screen, which is what scrolls
-	viewport viewport.Model // scrolls the transcript
+	lines    []transcriptLine // transcript, one entry per line
+	rows     []string         // the lines wrapped to the screen, which is what scrolls
+	viewport viewport.Model   // scrolls the transcript
 	input    textinput.Model
 
 	sel      selection // transcript text picked for copying
@@ -205,6 +205,14 @@ func refreshStatus() tea.Msg {
 // run executes a submitted line off the UI goroutine.
 func run(line string, id uint64) tea.Cmd {
 	return func() tea.Msg {
+		if parts, err := splitCommandLine(line); err == nil && len(parts) > 0 {
+			switch strings.ToLower(parts[0]) {
+			case "help", "?":
+				return resultMsg{id: id, lines: replHelpLines()}
+			case "list":
+				return resultMsg{id: id, lines: stationListLines()}
+			}
+		}
 		out, err := execute(line)
 		return resultMsg{id: id, out: out, err: err}
 	}
@@ -277,7 +285,6 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			setup := updated.(providerSetupModel)
 			t.providersUI.setup = &setup
 		}
-		t.refreshInterfaceBanner()
 		if rewrap {
 			t.wrap()
 		}
@@ -315,7 +322,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 
 	case statusMsg:
 		if msg.status != nil && msg.status.Error != "" && (t.status == nil || t.status.Error != msg.status.Error || t.status.State != msg.status.State) {
-			t.print(styleError.Render("  playback: ") + strings.Join(statusFacts(msg.status), " │ "))
+			t.printLine(transcriptSpan{transcriptError, "  playback: "}, transcriptSpan{transcriptBody, strings.Join(statusFacts(msg.status), " │ ")})
 		}
 		t.status = msg.status
 		if s := msg.status; s != nil && s.Episode != nil && t.podcasts.library != nil {
@@ -345,7 +352,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		if msg.id != t.commandID || t.task == nil {
 			return nil
 		}
-		t.print(styleDim.Render("  ┊ ") + msg.line)
+		t.printOutput(commandOutputLine(msg.line))
 		return t.task.next
 
 	case resultMsg:
@@ -374,20 +381,26 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			t.redraw()
 		}
 		// Diagnostic commands can return useful findings alongside a failure.
+		for _, line := range msg.lines {
+			t.printOutput(line)
+		}
 		if msg.out != "" {
-			for _, line := range strings.Split(msg.out, "\n") {
-				t.print(styleDim.Render("  ┊ ") + line)
+			for line := range strings.SplitSeq(msg.out, "\n") {
+				if completed == "theme" {
+					t.printOutput(transcriptLine{{transcriptLiteral, line}})
+				} else {
+					t.printOutput(commandOutputLine(line))
+				}
 			}
 		}
-		var missing *requirementsError
-		if errors.As(msg.err, &missing) {
-			for _, line := range strings.Split(missing.chill(), "\n") {
-				t.print(line)
+		if missing, ok := errors.AsType[*requirementsError](msg.err); ok {
+			for _, line := range missing.transcript() {
+				t.printLine(line...)
 			}
 		} else if errors.Is(msg.err, context.Canceled) {
-			t.print(styleDim.Render("  cancelled"))
+			t.printLine(transcriptSpan{transcriptDim, "  cancelled"})
 		} else if msg.err != nil {
-			t.print(styleError.Render("  error: ") + msg.err.Error())
+			t.printLine(transcriptSpan{transcriptError, "  error: "}, transcriptSpan{transcriptBody, msg.err.Error()})
 		}
 		var presentationCommand tea.Cmd
 		if msg.err == nil && (completed == "theme" || completed == "keys" || completed == "interface") {
@@ -395,7 +408,6 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 				t.presentation, _, _ = activateInterfaceSettings(settings)
 				t.enforcePresentationMode()
 				t.configureInputs()
-				t.refreshInterfaceBanner()
 				t.wrap()
 				presentationCommand = t.interfaceColorProfileCommand()
 			}
@@ -743,7 +755,7 @@ func (t *tui) submit() tea.Cmd {
 		return nil
 	case "cancel":
 		if !t.cancelCommand() {
-			t.print(styleDim.Render("  no diagnostics running"))
+			t.printLine(transcriptSpan{transcriptDim, "  no diagnostics running"})
 		}
 		return nil
 	}
@@ -763,7 +775,7 @@ func (t *tui) start(line string) tea.Cmd {
 	// A fresh ID keeps late ticks from a previous command out of this animation.
 	t.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	t.activeLine = len(t.lines)
-	t.print(t.promptLabel() + highlight(line))
+	t.printLine(append(transcriptLine{{transcriptPrompt, t.promptText()}}, highlight(line)...)...)
 	command := run(line, t.commandID)
 	if t.active == "doctor" {
 		args := strings.Fields(line)[1:]
@@ -817,20 +829,24 @@ func (t *tui) shutdown() {
 	}
 }
 
-// highlight colors a submitted line for the transcript.
-func highlight(line string) string {
+// highlight assigns styles to a submitted command before rendering it.
+func highlight(line string) transcriptLine {
+	var spans transcriptLine
 	words := strings.Fields(line)
-	for i, w := range words {
-		switch {
-		case findStation(w) != nil && (i == 0 || i == 1 && strings.EqualFold(words[0], "play")):
-			words[i] = styleStation.Render(w)
-		case i == 0 && isCommand(w):
-			words[i] = styleCommand.Render(w)
-		default:
-			words[i] = styleInput.Render(w)
+	for i, word := range words {
+		if i > 0 {
+			spans = append(spans, transcriptSpan{transcriptLiteral, " "})
 		}
+		role := transcriptBody
+		switch {
+		case findStation(word) != nil && (i == 0 || i == 1 && strings.EqualFold(words[0], "play")):
+			role = transcriptStation
+		case i == 0 && isCommand(word):
+			role = transcriptCommand
+		}
+		spans = append(spans, transcriptSpan{role, word})
 	}
-	return strings.Join(words, " ")
+	return spans
 }
 
 // isCommand reports whether word is a REPL command.
@@ -845,13 +861,18 @@ func isCommand(word string) bool {
 
 // print adds a line to the transcript and brings it into view.
 func (t *tui) print(line string) {
-	t.lines = append(t.lines, line)
+	t.printLine(transcriptSpan{transcriptLiteral, line})
+}
+
+func (t *tui) printLine(spans ...transcriptSpan) {
+	entry := transcriptLine(spans)
+	t.lines = append(t.lines, entry)
 	if len(t.lines) > maxTranscript {
 		t.activeLine = max(-1, t.activeLine-(len(t.lines)-maxTranscript))
 		t.lines = t.lines[len(t.lines)-maxTranscript:]
 		t.wrap()
 	} else {
-		t.appendRows(len(t.lines)-1, line)
+		t.appendRows(len(t.lines)-1, entry)
 		t.redraw()
 	}
 	t.viewport.GotoBottom()
@@ -859,8 +880,8 @@ func (t *tui) print(line string) {
 
 // appendRows reserves room for the spinner without putting animation frames in
 // the transcript or copied text.
-func (t *tui) appendRows(index int, line string) {
-	rows := t.wrapped(line)
+func (t *tui) appendRows(index int, line transcriptLine) {
+	rows := t.wrapped(line.render())
 	if t.running && index == t.activeLine {
 		t.activeExtraRow = t.width > 1 && lipgloss.Width(rows[len(rows)-1])+2 > t.width-1
 		if t.activeExtraRow {
@@ -898,12 +919,14 @@ func (t *tui) wrap() {
 	}
 }
 
-// clear empties the transcript, leaving the banner.
+// clear empties the transcript without changing the fixed header.
 func (t *tui) clear() {
-	t.lines, t.rows = nil, nil
+	t.lines = nil
+	t.rows = nil
 	t.activeLine, t.activeRow, t.activeExtraRow = -1, -1, false
 	t.sel, t.flashing = selection{}, false
-	t.print(styleDim.Render(t.interfaceBanner()))
+	t.redraw()
+	t.viewport.GotoTop()
 }
 
 // setInput replaces what is in the prompt and puts the cursor at the end.
@@ -980,8 +1003,8 @@ func (t *tui) paletteRows() int {
 	if t.presentation.Simplified || interfaceLayoutTier(t.width, t.height, false, t.presentation.Simplified) == "minimal" || len(t.suggestions) == 0 || t.height < minPaletteLines {
 		return 0
 	}
-	// the rule, the prompt, the status bar, the border and a line of transcript
-	room := t.height - 6
+	// Reserve the header, rule, prompt, status, border and a transcript row.
+	room := t.height - 6 - t.headerHeight()
 	if room < minPaletteRoom {
 		return 0
 	}
@@ -997,17 +1020,19 @@ func (t *tui) paletteHeight() int {
 }
 
 // promptLabel is the prompt, which shows the station that is loaded.
-func (t *tui) promptLabel() string {
+func (t *tui) promptLabel() string { return stylePrompt.Render(t.promptText()) }
+
+func (t *tui) promptText() string {
 	if t.status != nil && t.status.Item != nil && t.status.Item.Kind != MediaStation {
-		return stylePrompt.Render("chill[" + string(t.status.Item.Kind) + "]> ")
+		return "chill[" + string(t.status.Item.Kind) + "]> "
 	}
 	if t.status != nil && t.status.Episode != nil {
-		return stylePrompt.Render("chill[podcast]> ")
+		return "chill[podcast]> "
 	}
 	if t.status == nil || t.status.Station == "" {
-		return stylePrompt.Render("chill> ")
+		return "chill> "
 	}
-	return stylePrompt.Render("chill[" + t.status.Station + "]> ")
+	return "chill[" + t.status.Station + "]> "
 }
 
 // fit sizes the transcript and the prompt to the window and what is showing.
@@ -1025,7 +1050,7 @@ func (t *tui) fit() {
 	if t.presentation.ShowStatus {
 		statusHeight = 1
 	}
-	t.viewport.SetHeight(max(t.height-2-statusHeight-t.paletteHeight()-t.visualizerHeight()-t.panelHeight()-t.modeNoteHeight(), 1))
+	t.viewport.SetHeight(max(t.height-2-statusHeight-t.paletteHeight()-t.visualizerHeight()-t.panelHeight()-t.headerHeight(), 1))
 	if follow || t.viewport.PastBottom() {
 		t.viewport.GotoBottom()
 	}
@@ -1123,7 +1148,8 @@ func (t *tui) View() tea.View {
 	if t.paletteOpen() {
 		parts = append(parts, t.palette())
 	}
-	parts = append(parts, t.input.View())
+	// Completion hints can extend the input's padding past its configured width.
+	parts = append(parts, ansi.Truncate(t.input.View(), t.width, ""))
 	if t.presentation.ShowStatus {
 		parts = append(parts, t.statusBar())
 	}
@@ -1136,30 +1162,12 @@ func (t *tui) View() tea.View {
 	return t.decoratedView(v)
 }
 
-func (t *tui) modeNoteHeight() int {
-	if t.modeNote != "" {
-		return 1
-	}
-	return 0
-}
-
 func (t *tui) transcriptHeight() int {
-	return t.viewport.Height() + t.modeNoteHeight()
+	return t.headerHeight() + t.viewport.Height()
 }
 
 func (t *tui) transcriptView() string {
-	content := withScrollbar(t.viewport)
-	if t.modeNote == "" {
-		return content
-	}
-	rows := strings.Split(content, "\n")
-	if len(rows) < 2 {
-		return strings.Join(append(rows, styleDim.Render("  "+t.modeNote)), "\n")
-	}
-	rows = append(rows, "")
-	copy(rows[2:], rows[1:len(rows)-1])
-	rows[1] = styleDim.Render("  " + t.modeNote)
-	return strings.Join(rows, "\n")
+	return strings.Join(append(t.replHeader(), withScrollbar(t.viewport)), "\n")
 }
 
 // withScrollbar renders a viewport with a scrollbar in the column after it,
