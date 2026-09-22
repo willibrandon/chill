@@ -539,11 +539,7 @@ func (t *tui) libraryView() tea.View {
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
 		text := b.rowText(rows[index])
-		style, prefix := styleInput, "   "
-		if index == b.selected {
-			style, prefix = styleSelected, " ❯ "
-		}
-		lines[row+2] = style.Render(fit(prefix + text))
+		lines[row+2] = renderBrowserRow(text, width, index == b.selected)
 	}
 	if layout.note >= 0 {
 		note := b.note

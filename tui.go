@@ -1179,7 +1179,7 @@ func (t *tui) palette() string {
 			style = styleStation
 		}
 		if i == t.selected {
-			marker, style = " ❯ ", styleSelected
+			marker, style = " ❯ ", styleSelection
 		}
 
 		text := ansi.Truncate(marker+column(s.text, nameWidth)+s.desc, inner, "…")

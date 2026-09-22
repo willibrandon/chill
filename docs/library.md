@@ -1,5 +1,7 @@
 # Library, queues, and playlists
 
+![Browsing the unified library](../assets/library.png)
+
 Every playable source uses the same queue item: configured and discovered
 stations, podcast episodes, local audio, direct HTTP(S) audio, and entries from
 M3U, M3U8, or PLS files. Queue state, shuffle, repeat, undo history, saved
