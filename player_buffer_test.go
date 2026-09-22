@@ -247,7 +247,7 @@ type errorReader struct{ err error }
 func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
 
 // TestBufferedPCMTitlesFollowConsumption keeps prefetched stream tags from
-// changing now-playing before the associated PCM leaves the network reserve.
+// changing or clearing now-playing before the associated PCM is consumed.
 func TestBufferedPCMTitlesFollowConsumption(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var got []string
@@ -259,8 +259,11 @@ func TestBufferedPCMTitlesFollowConsumption(t *testing.T) {
 				pw.Write(bytes.Repeat([]byte{1}, 1024))
 				// Let the producer commit the first samples before the next tag.
 				time.Sleep(time.Millisecond)
-				title("second")
+				title("")
 				pw.Write(bytes.Repeat([]byte{2}, 1024))
+				time.Sleep(time.Millisecond)
+				title("second")
+				pw.Write(bytes.Repeat([]byte{3}, 1024))
 			}()
 			return pr, "", nil
 		})
@@ -279,10 +282,22 @@ func TestBufferedPCMTitlesFollowConsumption(t *testing.T) {
 		if len(got) != 1 || got[0] != "first" {
 			t.Fatalf("first audio tags: %v", got)
 		}
+		if _, err := io.ReadFull(r, buf[:512]); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 || got[1] != "" {
+			t.Fatalf("metadata clear was lost: %q", got)
+		}
+		if _, err := io.ReadFull(r, buf[:512]); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("untagged audio emitted another update: %q", got)
+		}
 		if _, err := io.ReadFull(r, buf); err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 2 || got[1] != "second" {
+		if len(got) != 3 || got[2] != "second" {
 			t.Fatalf("second audio tags: %v", got)
 		}
 	})

@@ -128,7 +128,8 @@ func (r *bufferedPCM) Read(dst []byte) (int, error) {
 		}
 		if r.playing && available > 0 {
 			var title string
-			if len(r.titles) > 0 && r.titles[0].offset <= r.read {
+			hasTitle := len(r.titles) > 0 && r.titles[0].offset <= r.read
+			if hasTitle {
 				title = r.titles[0].value
 				r.titles = r.titles[1:]
 			}
@@ -142,7 +143,7 @@ func (r *bufferedPCM) Read(dst []byte) (int, error) {
 			r.read += uint64(n)
 			r.notify()
 			r.mu.Unlock()
-			if title != "" && r.onTitle != nil {
+			if hasTitle && r.onTitle != nil {
 				r.onTitle(title)
 			}
 			return n, nil
