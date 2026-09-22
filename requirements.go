@@ -35,24 +35,24 @@ func (e *requirementsError) Error() string {
 }
 
 // chill puts it the laid-back way, with how to fix it.
-func (e *requirementsError) chill() string {
-	palette := currentCLIPalette()
+func (e *requirementsError) chill() string { return renderCLITranscript(e.transcript()) }
+
+func (e *requirementsError) transcript() []transcriptLine {
 	them := "it"
 	if len(e.missing) > 1 {
 		them = "them"
 	}
-
-	lines := []string{
-		palette.purple + "  ~ this source needs an extra tool ~" + palette.reset,
-		"",
-		palette.dim + "  chill couldn't find " + strings.Join(e.missing, " or ") + "." + palette.reset,
-		palette.dim + "  no rush. grab " + them + " and come back, the beats will wait:" + palette.reset,
-		"",
+	lines := []transcriptLine{
+		{{transcriptCommand, "  ~ this source needs an extra tool ~"}},
+		{},
+		{{transcriptDim, "  chill couldn't find " + strings.Join(e.missing, " or ") + "."}},
+		{{transcriptDim, "  no rush. grab " + them + " and come back, the beats will wait:"}},
+		{},
 	}
-	for _, cmd := range installCommands(e.missing) {
-		lines = append(lines, "    "+palette.cyan+cmd+palette.reset)
+	for _, command := range installCommands(e.missing) {
+		lines = append(lines, transcriptLine{{transcriptLiteral, "    "}, {transcriptBright, command}})
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 // installCommands returns how to install the given programs on this platform,

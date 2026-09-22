@@ -52,9 +52,6 @@ func setCLIColors(settings interfaceSettings, theme interfaceTheme) {
 				return ""
 			}
 			r, g, b := int(math.Round(rgb[0]*255)), int(math.Round(rgb[1]*255)), int(math.Round(rgb[2]*255))
-			if mode == "ansi16" {
-				return "\033[97m"
-			}
 			if mode == "ansi256" {
 				index := nearestANSIIndex(r, g, b, 256)
 				return fmt.Sprintf("\033[38;5;%dm", index)
@@ -63,6 +60,7 @@ func setCLIColors(settings interfaceSettings, theme interfaceTheme) {
 		}
 		palette.reset, palette.dim = "\033[0m", "\033[2m"
 		if mode == "ansi16" {
+			// Standalone output uses the terminal canvas, not the TUI theme background.
 			palette.purple, palette.pink, palette.cyan = "\033[36m", "\033[94m", "\033[97m"
 		} else {
 			palette.purple, palette.pink, palette.cyan = ansiColor(theme.Secondary), ansiColor(theme.Accent), ansiColor(theme.Bright)

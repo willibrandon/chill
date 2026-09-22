@@ -120,21 +120,40 @@ func (t *tui) interfaceBanner() string {
 		t.presentation.bindingHint("global.interface", "interface") + " · " + t.presentation.bindingHint("global.keys", "keys")
 }
 
-func (t *tui) refreshInterfaceBanner() {
-	if len(t.lines) > 0 && strings.HasPrefix(ansi.Strip(t.lines[0]), "chill  type a station") {
-		banner := styleDim.Render(t.interfaceBanner())
-		if t.lines[0] != banner {
-			follow := t.viewport.AtBottom()
-			offset := t.viewport.YOffset()
-			oldRows := len(t.wrapped(t.lines[0]))
-			t.lines[0] = banner
-			newRows := len(t.wrapped(banner))
-			t.wrap()
-			if !follow {
-				t.viewport.SetYOffset(max(0, offset+newRows-oldRows))
-			}
+// replHeader stays outside the scrolling transcript, including wrapped hints.
+func (t *tui) replHeader() []string {
+	banner := t.interfaceBanner()
+	if t.width > 0 {
+		banner = lipgloss.Wrap(banner, t.width, "")
+	}
+	rows := strings.Split(banner, "\n")
+	if t.height > 0 {
+		// Keep most of the screen for output and the pinned prompt. Long key
+		// alternatives remain available in the key overlay and help screen.
+		budget := max(1, min(3, t.height/4))
+		if t.modeNote != "" {
+			budget = max(1, budget-1)
+		}
+		if len(rows) > budget {
+			rows = rows[:budget]
+			rows[budget-1] = ansi.Truncate(rows[budget-1]+" …", t.width, "…")
 		}
 	}
+	for index, row := range rows {
+		rows[index] = styleDim.Render(row)
+	}
+	if t.modeNote != "" {
+		note := "  " + t.modeNote
+		if t.width > 0 {
+			note = ansi.Truncate(note, t.width, "…")
+		}
+		rows = append(rows, styleDim.Render(note))
+	}
+	return rows
+}
+
+func (t *tui) headerHeight() int {
+	return len(t.replHeader())
 }
 
 func configureInterfaceInput(input *textinput.Model) {
@@ -200,11 +219,11 @@ func (t *tui) closeAppearance(save bool) tea.Cmd {
 	t.appearance.open = false
 	t.appearance.editing = ""
 	t.configureInputs()
-	t.refreshInterfaceBanner()
 	return t.interfaceColorProfileCommand()
 }
 
 func (t *tui) configureInputs() {
+	t.refreshTranscriptTheme()
 	configureInterfaceInput(&t.input)
 	if t.libraryUI.input.Prompt != "" {
 		configureInterfaceInput(&t.libraryUI.input)
@@ -309,7 +328,6 @@ func (t *tui) adjustAppearance(delta int) tea.Cmd {
 	t.presentation = effective
 	t.enforcePresentationMode()
 	t.configureInputs()
-	t.refreshInterfaceBanner()
 	return t.interfaceColorProfileCommand()
 }
 
@@ -381,7 +399,6 @@ func (t *tui) appearanceKey(msg tea.KeyPressMsg) tea.Cmd {
 		t.enforcePresentationMode()
 		t.configureInputs()
 		browser.note = "Defaults previewed · " + t.presentation.bindingHint("interface.save", "saves") + " · " + t.presentation.bindingHint("interface.cancel", "cancels")
-		t.refreshInterfaceBanner()
 		return t.interfaceColorProfileCommand()
 	}
 	return nil

@@ -669,33 +669,43 @@ func helpWidth() int {
 }
 
 // replHelp lists the REPL commands.
-func replHelp() string {
-	palette := currentCLIPalette()
-	var b strings.Builder
-	for i, c := range replCommands {
-		fmt.Fprintf(&b, "%s%-*s%s  %s%s%s\n", palette.cyan, helpWidth(), helpNames()[i], palette.reset, palette.dim, c.desc, palette.reset)
+func replHelp() string { return renderCLITranscript(replHelpLines()) }
+
+func replHelpLines() []transcriptLine {
+	lines := make([]transcriptLine, 0, len(replCommands)+1)
+	names := helpNames()
+	for index, command := range replCommands {
+		lines = append(lines, transcriptLine{
+			{transcriptBright, fmt.Sprintf("%-*s", helpWidth(), names[index])},
+			{transcriptLiteral, "  "}, {transcriptDim, command.desc},
+		})
 	}
-	fmt.Fprintf(&b, "%s%-*s%s  %s%s%s", palette.cyan, helpWidth(), "<station>", palette.reset, palette.dim, "same as play <station>", palette.reset)
-	return b.String()
+	return append(lines, transcriptLine{
+		{transcriptBright, fmt.Sprintf("%-*s", helpWidth(), "<station>")},
+		{transcriptLiteral, "  "}, {transcriptDim, "same as play <station>"},
+	})
 }
 
 // stationList lists the stations, marking the one that is loaded.
-func stationList() string {
-	palette := currentCLIPalette()
-	current := ""
-	if s, _ := fetchStatus(); s != nil {
-		current = s.Station
-	}
+func stationList() string { return renderCLITranscript(stationListLines()) }
 
-	var lines []string
-	for _, s := range stationSnapshot() {
-		marker := " "
-		if s.Name == current {
-			marker = palette.pink + "♪" + palette.reset
-		}
-		lines = append(lines, fmt.Sprintf("%s %s%-16s%s  %s%s%s", marker, palette.cyan, s.Name, palette.reset, palette.dim, s.Desc, palette.reset))
+func stationListLines() []transcriptLine {
+	current := ""
+	if status, _ := fetchStatus(); status != nil {
+		current = status.Station
 	}
-	return strings.Join(lines, "\n")
+	var lines []transcriptLine
+	for _, station := range stationSnapshot() {
+		marker := transcriptSpan{transcriptLiteral, " "}
+		if station.Name == current {
+			marker = transcriptSpan{transcriptPrompt, "♪"}
+		}
+		lines = append(lines, transcriptLine{
+			marker, {transcriptLiteral, " "}, {transcriptBright, fmt.Sprintf("%-16s", station.Name)},
+			{transcriptLiteral, "  "}, {transcriptDim, station.Desc},
+		})
+	}
+	return lines
 }
 
 // maxHistory is how many lines of history are kept.

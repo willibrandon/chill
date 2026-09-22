@@ -32,7 +32,7 @@ func (t *tui) visualizerHeight() int {
 	if t.viz.fullscreen {
 		return max(0, t.height-2)
 	}
-	room := t.height - 3 - t.paletteHeight() - t.panelHeight() - 4
+	room := t.height - 3 - t.paletteHeight() - t.panelHeight() - t.headerHeight() - 4
 	if room < 3 {
 		return 0
 	}
@@ -125,7 +125,7 @@ func (t *tui) visualizerCommand(arg string) {
 	v := &t.viz
 	switch arg {
 	case "list":
-		t.print(styleDim.Render("  " + strings.Join(visualizer.Modes, ", ")))
+		t.printLine(transcriptSpan{transcriptDim, "  " + strings.Join(visualizer.Modes, ", ")})
 		return
 	case "off":
 		v.enabled, v.focused, v.fullscreen = false, false, false
@@ -141,7 +141,7 @@ func (t *tui) visualizerCommand(arg string) {
 	default:
 		i := visualizer.Index(arg)
 		if i < 0 {
-			t.print(styleError.Render("  unknown visualizer; use viz list, viz <mode>, or viz off"))
+			t.printLine(transcriptSpan{transcriptError, "  unknown visualizer; use viz list, viz <mode>, or viz off"})
 			return
 		}
 		v.mode = i
@@ -154,7 +154,7 @@ func (t *tui) visualizerCommand(arg string) {
 	v.enabled, v.focused = true, true
 	if t.width > 0 && t.height > 0 && t.visualizerHeight() == 0 {
 		v.focused, v.fullscreen = false, false
-		t.print(styleDim.Render("  visualizer unavailable at this size or configured height"))
+		t.printLine(transcriptSpan{transcriptDim, "  visualizer unavailable at this size or configured height"})
 	}
 	t.sel, t.flashing, t.dragging = selection{}, false, false
 }
