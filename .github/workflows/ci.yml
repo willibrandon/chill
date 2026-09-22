@@ -135,6 +135,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mpv ffmpeg
+          python -m pip install "yt-dlp[default]"
       - name: Build current test binary and previous release
         env:
           GOBIN: ${{ runner.temp }}/chill-legacy
