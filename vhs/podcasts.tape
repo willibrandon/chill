@@ -1,4 +1,4 @@
-# Browses a public feed, subscribes, plays briefly, and stops playback.
+# Browses a public feed, plays briefly, and stops the isolated session.
 Require go
 Require mpv
 Require ffmpeg
@@ -12,31 +12,20 @@ Set WindowBar Colorful
 Set TypingSpeed 0ms
 Set Framerate 30
 Set WaitTimeout 60s
-Env NO_COLOR ""
 Env CLICOLOR_FORCE "1"
 Env COLORTERM "truecolor"
 
 Hide
-Type "go run . -i"
+Type "go run ./vhs/fixtures repl"
 Enter
 Wait+Screen /chill>/
 Show
 Type "podcasts https://podcasts.files.bbci.co.uk/p01plr2p.rss"
 Enter
 Wait+Screen /300 items/
-Type "f"
-Wait+Screen /Subscribed: Tech Life/
 Enter
-Wait+Screen /playing.*Tech Life/
+Wait+Screen /playing │/
 Sleep 2s
 Screenshot assets/podcasts.png
 Sleep 1s
-Hide
-Escape
-Sleep 300ms
-Escape
-Wait+Screen /chill\[podcast\]>/
-Type "stop"
-Enter
-Wait+Screen /stay chill/
 Ctrl+q

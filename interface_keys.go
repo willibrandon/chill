@@ -473,31 +473,14 @@ func globalKeyAppliesToScope(scope string) bool {
 	return scope != "playback" && scope != "foreground-lyrics"
 }
 
-func interfaceKeyRows(settings interfaceSettings, scope, query string) []string {
-	query = strings.ToLower(strings.TrimSpace(query))
-	actions := slices.Clone(interfaceKeyActions)
-	slices.SortFunc(actions, func(a, b keyAction) int {
-		if a.scope == b.scope {
-			return strings.Compare(a.id, b.id)
-		}
-		return strings.Compare(a.scope, b.scope)
-	})
-	var rows []string
-	for _, action := range actions {
-		if scope != "" && action.scope != "global" && !keyActionApplies(action, scope) {
-			continue
-		}
-		keys := strings.Join(settings.keysFor(action), ", ")
-		searchable := strings.ToLower(action.id + " " + action.scope + " " + action.description + " " + keys)
-		if query != "" && !strings.Contains(searchable, query) {
-			continue
-		}
-		rows = append(rows, fmt.Sprintf("%-18s  %-24s  %s", keys, action.id, action.description))
-	}
-	return rows
+type interfaceKeyEntry struct {
+	id          string
+	scope       string
+	description string
+	keys        []string
 }
 
-func interfaceKeyValues(settings interfaceSettings, scope, query string) []map[string]any {
+func interfaceKeyEntries(settings interfaceSettings, scope, query string) []interfaceKeyEntry {
 	query = strings.ToLower(strings.TrimSpace(query))
 	actions := slices.Clone(interfaceKeyActions)
 	slices.SortFunc(actions, func(a, b keyAction) int {
@@ -506,7 +489,7 @@ func interfaceKeyValues(settings interfaceSettings, scope, query string) []map[s
 		}
 		return strings.Compare(a.scope, b.scope)
 	})
-	values := make([]map[string]any, 0, len(actions))
+	var entries []interfaceKeyEntry
 	for _, action := range actions {
 		if scope != "" && action.scope != "global" && !keyActionApplies(action, scope) {
 			continue
@@ -516,7 +499,25 @@ func interfaceKeyValues(settings interfaceSettings, scope, query string) []map[s
 		if query != "" && !strings.Contains(searchable, query) {
 			continue
 		}
-		values = append(values, map[string]any{"id": action.id, "scope": action.scope, "description": action.description, "keys": keys})
+		entries = append(entries, interfaceKeyEntry{id: action.id, scope: action.scope, description: action.description, keys: keys})
+	}
+	return entries
+}
+
+func interfaceKeyRows(settings interfaceSettings, scope, query string) []string {
+	entries := interfaceKeyEntries(settings, scope, query)
+	rows := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		rows = append(rows, fmt.Sprintf("%-18s  %-24s  %s", strings.Join(entry.keys, ", "), entry.id, entry.description))
+	}
+	return rows
+}
+
+func interfaceKeyValues(settings interfaceSettings, scope, query string) []map[string]any {
+	entries := interfaceKeyEntries(settings, scope, query)
+	values := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, map[string]any{"id": entry.id, "scope": entry.scope, "description": entry.description, "keys": entry.keys})
 	}
 	return values
 }

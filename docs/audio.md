@@ -1,5 +1,7 @@
 # Audio output
 
+![Choosing an audio profile and output device](../assets/audio.png)
+
 Chill sends decoded float PCM through the equalizer and visualizer before mpv
 opens the selected output device. Output settings apply to stations, podcasts,
 local media, direct URLs, and provider tracks in daemon and foreground mode.

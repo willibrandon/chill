@@ -539,11 +539,27 @@ func (t *tui) libraryView() tea.View {
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
 		text := b.rowText(rows[index])
-		style, prefix := styleInput, "   "
 		if index == b.selected {
-			style, prefix = styleSelected, " ❯ "
+			lines[row+2] = styleSelection.Render(fit(" ❯ " + text))
+			continue
 		}
-		lines[row+2] = style.Render(fit(prefix + text))
+		prefix := styleDim.Render("   ")
+		switch b.page {
+		case "home":
+			lines[row+2] = fit(prefix + styleCommand.Render(text))
+		case "files":
+			style := styleInput
+			if strings.HasSuffix(text, "/") {
+				style = stylePrompt
+			}
+			lines[row+2] = fit(prefix + style.Render(text))
+		default:
+			marker := ""
+			if strings.HasPrefix(text, "♥ ") || strings.HasPrefix(text, "★ ") {
+				marker, text = text[:len("♥ ")], text[len("♥ "):]
+			}
+			lines[row+2] = fit(prefix + styleStation.Render(marker) + styleInput.Render(text))
+		}
 	}
 	if layout.note >= 0 {
 		note := b.note

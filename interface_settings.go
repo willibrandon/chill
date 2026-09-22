@@ -600,7 +600,7 @@ func cloneBindings(input map[string][]string) map[string][]string {
 func applyInterfaceTheme(theme interfaceTheme, settings interfaceSettings) {
 	if settings.ColorMode == "none" {
 		styleDim, stylePrompt, styleInput, styleCommand = lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
-		styleStation, styleSelected, styleError, styleHeading = lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
+		styleStation, styleSuccess, styleSelected, styleError, styleHeading = lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
 		styleBorder, styleTitle, styleTrack, styleThumb, styleStatus = lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
 		styleSelection, styleFlash, styleNotice = lipgloss.NewStyle().Reverse(true), lipgloss.NewStyle().Reverse(true), lipgloss.NewStyle().Reverse(true)
 		setCLIColors(settings, theme)
@@ -615,6 +615,7 @@ func applyInterfaceTheme(theme interfaceTheme, settings interfaceSettings) {
 	styleInput = base(theme.Foreground)
 	styleCommand = base(theme.Secondary)
 	styleStation = base(theme.Warning)
+	styleSuccess = base(theme.Success)
 	styleSelected = base(theme.Bright)
 	styleError = base(theme.Error)
 	styleHeading = base(theme.Warning)

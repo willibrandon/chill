@@ -33,7 +33,7 @@ func namedPipe() (string, string, error) {
 		return "", "", err
 	}
 	sid := user.User.Sid.String()
-	name := `\\.\pipe\chill-` + strings.ReplaceAll(sid, "-", "_")
+	name := `\\.\pipe\chill-` + strings.ReplaceAll(sid, "-", "_") + ipcNamespaceSuffix()
 	security := fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;%s)", sid)
 	return name, security, nil
 }

@@ -1,5 +1,7 @@
 # Terminal interface
 
+![Previewing the Paper theme and interface settings](../assets/interface.png)
+
 Chill uses one presentation profile across the interactive REPL, foreground
 playback, command output, and remote state. Press `F10` to preview changes
 without leaving the current session. Press `s` to save the preview or `Esc` to
