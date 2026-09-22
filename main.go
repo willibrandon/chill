@@ -19,33 +19,73 @@ package main
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/willibrandon/chill/internal/notify"
 	"github.com/willibrandon/chill/internal/podcast"
 )
 
-const (
-	reset  = "\033[0m"
-	dim    = "\033[2m"
-	purple = "\033[38;5;183m"
-	pink   = "\033[38;5;218m"
-	cyan   = "\033[38;5;159m"
-)
+type cliPalette struct {
+	reset, dim, purple, pink, cyan, logo string
+}
 
-var logo = `
-` + purple + `        ╭──────────────────╮` + reset + `
-` + pink + `        │ ` + reset + `  ░▒▓ ` + cyan + `chill` + reset + ` ▓▒░  ` + pink + `│` + reset + `
-` + purple + `        ╰──────────────────╯` + reset + `
-`
+var activeCLIPalette atomic.Pointer[cliPalette]
+
+func setCLIColors(settings interfaceSettings, theme interfaceTheme) {
+	palette := cliPalette{}
+	mode := resolvedCLIColorMode(settings.ColorMode)
+	if mode != "none" {
+		ansiColor := func(value string) string {
+			rgb, err := parseHexColor(value)
+			if err != nil {
+				return ""
+			}
+			r, g, b := int(math.Round(rgb[0]*255)), int(math.Round(rgb[1]*255)), int(math.Round(rgb[2]*255))
+			if mode == "ansi16" {
+				return "\033[97m"
+			}
+			if mode == "ansi256" {
+				index := nearestANSIIndex(r, g, b, 256)
+				return fmt.Sprintf("\033[38;5;%dm", index)
+			}
+			return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+		}
+		palette.reset, palette.dim = "\033[0m", "\033[2m"
+		if mode == "ansi16" {
+			palette.purple, palette.pink, palette.cyan = "\033[36m", "\033[94m", "\033[97m"
+		} else {
+			palette.purple, palette.pink, palette.cyan = ansiColor(theme.Secondary), ansiColor(theme.Accent), ansiColor(theme.Bright)
+		}
+	}
+	if settings.ascii() {
+		palette.logo = "\n" + palette.purple + "        +------------------+" + palette.reset + "\n" +
+			palette.pink + "        | " + palette.reset + "  .:# " + palette.cyan + "chill" + palette.reset + " #: .  " + palette.pink + "|" + palette.reset + "\n" +
+			palette.purple + "        +------------------+" + palette.reset + "\n"
+	} else {
+		palette.logo = "\n" + palette.purple + "        ╭──────────────────╮" + palette.reset + "\n" +
+			palette.pink + "        │ " + palette.reset + "  ░▒▓ " + palette.cyan + "chill" + palette.reset + " ▓▒░  " + palette.pink + "│" + palette.reset + "\n" +
+			palette.purple + "        ╰──────────────────╯" + palette.reset + "\n"
+	}
+	activeCLIPalette.Store(&palette)
+}
+
+func currentCLIPalette() cliPalette {
+	if palette := activeCLIPalette.Load(); palette != nil {
+		return *palette
+	}
+	return cliPalette{reset: "\033[0m", dim: "\033[2m", purple: "\033[38;5;183m", pink: "\033[38;5;218m", cyan: "\033[38;5;159m"}
+}
 
 // vibes contains random taglines displayed during playback.
 var vibes = []string{
@@ -108,6 +148,7 @@ var configErr error
 
 func init() {
 	configErr = loadUserStations()
+	setCLIColors(defaultInterfaceSettings(), builtinInterfaceThemes[0])
 }
 
 func randInt(n int) int {
@@ -128,6 +169,12 @@ func main() {
 	// Capture the executable before a later client installation can replace its path.
 	_ = buildIdentity()
 	promoteTrailingPlaybackFlags()
+	interfaceSettings, interfaceErr := loadInterfaceSettings()
+	if interfaceErr != nil {
+		interfaceSettings = defaultInterfaceSettings()
+	}
+	setInterfaceSessionOverrides(interfaceOverridesFromArgs(os.Args[1:]))
+	_, _, _ = activateInterfaceSettings(interfaceSettings)
 	// commands
 	daemon := flag.Bool("daemon", false, "run as daemon")
 	repl := flag.Bool("i", false, "interactive mode (repl)")
@@ -158,9 +205,24 @@ func main() {
 	bufferMS := flag.Int("buffer", 0, "audio output buffer in milliseconds")
 	resampleQuality := flag.Int("resample-quality", 0, "audio resample quality (1-4)")
 	mono := flag.Bool("mono", false, "downmix audio to mono")
+	uiTheme := flag.String("theme", "", "terminal theme name")
+	noColor := flag.Bool("no-color", false, "disable terminal colors")
+	simplified := flag.Bool("simplified", false, "use the simplified accessible interface")
+	lowPower := flag.Bool("low-power", false, "reduce redraws and background work")
 
 	flag.Usage = printCLIHelp
 	flag.Parse()
+	if interfaceErr != nil {
+		fmt.Fprintln(os.Stderr, "interface:", interfaceErr)
+	}
+	_, noColorEnvironment := os.LookupEnv("NO_COLOR")
+	setInterfaceSessionOverrides(interfaceSessionOverrides{
+		Theme: *uiTheme, NoColor: *noColor || noColorEnvironment, Simplified: *simplified, LowPower: *lowPower,
+	})
+	if _, _, err := activateInterfaceSettings(interfaceSettings); err != nil && *uiTheme != "" {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
 	enableANSI()
 	if *fg {
 		if err := saveForegroundQueueModes(*shuffle, *repeat); err != nil {
@@ -228,8 +290,8 @@ func main() {
 	if !applyStartupAudio() {
 		return
 	}
-	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics" && flag.Arg(0) != "queue" && flag.Arg(0) != "playlist" && flag.Arg(0) != "library" && flag.Arg(0) != "remote" && flag.Arg(0) != "audio" && flag.Arg(0) != "device" && flag.Arg(0) != "providers" && flag.Arg(0) != "search" && flag.Arg(0) != "browse") {
-		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, lyrics, queue, playlist, library, remote, audio, device, provider, search, and browse commands"))
+	if *jsonOutput && !*status && (flag.NArg() == 0 || flag.Arg(0) != "status" && flag.Arg(0) != "podcasts" && flag.Arg(0) != "podcast" && flag.Arg(0) != "radio" && flag.Arg(0) != "history" && flag.Arg(0) != "lyrics" && flag.Arg(0) != "queue" && flag.Arg(0) != "playlist" && flag.Arg(0) != "library" && flag.Arg(0) != "remote" && flag.Arg(0) != "audio" && flag.Arg(0) != "device" && flag.Arg(0) != "providers" && flag.Arg(0) != "search" && flag.Arg(0) != "browse" && flag.Arg(0) != "theme" && flag.Arg(0) != "keys" && flag.Arg(0) != "interface") {
+		printResult("", fmt.Errorf("--json is supported by status, radio, podcast, history, lyrics, queue, playlist, library, remote, audio, device, provider, search, browse, theme, keys, and interface commands"))
 		return
 	}
 	if flag.NArg() > 0 {
@@ -364,6 +426,15 @@ func main() {
 			return
 		case "completion":
 			printResult(runCompletionCommand(args[1:]))
+			return
+		case "theme":
+			printResult(runThemeCommand(args[1:], *jsonOutput))
+			return
+		case "keys":
+			printResult(runKeysCommand(args[1:], *jsonOutput))
+			return
+		case "interface":
+			printResult(runInterfaceCommand(args[1:], *jsonOutput))
 			return
 		case "queue":
 			queueArgs := args[1:]
@@ -550,7 +621,7 @@ func main() {
 	switch {
 	case *daemon:
 		runDaemon()
-	case *repl || flag.NArg() == 0 && flag.NFlag() == 0:
+	case *repl || flag.NArg() == 0 && (flag.NFlag() == 0 || onlyInterfaceFlags()):
 		if !applyStartupEqualizer() {
 			return
 		}
@@ -623,6 +694,43 @@ func main() {
 	}
 }
 
+func interfaceOverridesFromArgs(args []string) interfaceSessionOverrides {
+	_, noColorEnvironment := os.LookupEnv("NO_COLOR")
+	overrides := interfaceSessionOverrides{NoColor: noColorEnvironment}
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--theme", "-theme":
+			if index+1 < len(args) {
+				overrides.Theme = args[index+1]
+				index++
+			}
+		case "--no-color", "-no-color":
+			overrides.NoColor = true
+		case "--simplified", "-simplified":
+			overrides.Simplified = true
+		case "--low-power", "-low-power":
+			overrides.LowPower = true
+		default:
+			if value, ok := strings.CutPrefix(args[index], "--theme="); ok {
+				overrides.Theme = value
+			} else if value, ok := strings.CutPrefix(args[index], "-theme="); ok {
+				overrides.Theme = value
+			}
+		}
+	}
+	return overrides
+}
+
+func onlyInterfaceFlags() bool {
+	only := true
+	flag.Visit(func(value *flag.Flag) {
+		if value.Name != "theme" && value.Name != "no-color" && value.Name != "simplified" && value.Name != "low-power" {
+			only = false
+		}
+	})
+	return only
+}
+
 // promoteTrailingPlaybackFlags keeps the conventional `chill file --fg`
 // spelling working with Go's flag parser, which otherwise stops at file.
 func promoteTrailingPlaybackFlags() {
@@ -633,9 +741,9 @@ func promoteTrailingPlaybackFlags() {
 			continue
 		}
 		switch args[i] {
-		case "--fg", "-fg", "--shuffle", "-shuffle", "--mono", "-mono":
+		case "--fg", "-fg", "--shuffle", "-shuffle", "--mono", "-mono", "--no-color", "-no-color", "--simplified", "-simplified", "--low-power", "-low-power":
 			promoted = append(promoted, args[i])
-		case "--repeat", "-repeat", "--eq", "-eq", "--device", "-device", "--audio-profile", "-audio-profile", "--sample-rate", "-sample-rate", "--buffer", "-buffer", "--resample-quality", "-resample-quality":
+		case "--repeat", "-repeat", "--eq", "-eq", "--device", "-device", "--audio-profile", "-audio-profile", "--sample-rate", "-sample-rate", "--buffer", "-buffer", "--resample-quality", "-resample-quality", "--theme", "-theme":
 			if i+1 < len(args) {
 				promoted = append(promoted, args[i], args[i+1])
 				i++
@@ -643,7 +751,7 @@ func promoteTrailingPlaybackFlags() {
 				rest = append(rest, args[i])
 			}
 		default:
-			if strings.HasPrefix(args[i], "--repeat=") || strings.HasPrefix(args[i], "-repeat=") || strings.HasPrefix(args[i], "--eq=") || strings.HasPrefix(args[i], "-eq=") || strings.HasPrefix(args[i], "--device=") || strings.HasPrefix(args[i], "-device=") || strings.HasPrefix(args[i], "--audio-profile=") || strings.HasPrefix(args[i], "-audio-profile=") || strings.HasPrefix(args[i], "--sample-rate=") || strings.HasPrefix(args[i], "-sample-rate=") || strings.HasPrefix(args[i], "--buffer=") || strings.HasPrefix(args[i], "-buffer=") || strings.HasPrefix(args[i], "--resample-quality=") || strings.HasPrefix(args[i], "-resample-quality=") {
+			if strings.HasPrefix(args[i], "--repeat=") || strings.HasPrefix(args[i], "-repeat=") || strings.HasPrefix(args[i], "--eq=") || strings.HasPrefix(args[i], "-eq=") || strings.HasPrefix(args[i], "--device=") || strings.HasPrefix(args[i], "-device=") || strings.HasPrefix(args[i], "--audio-profile=") || strings.HasPrefix(args[i], "-audio-profile=") || strings.HasPrefix(args[i], "--sample-rate=") || strings.HasPrefix(args[i], "-sample-rate=") || strings.HasPrefix(args[i], "--buffer=") || strings.HasPrefix(args[i], "-buffer=") || strings.HasPrefix(args[i], "--resample-quality=") || strings.HasPrefix(args[i], "-resample-quality=") || strings.HasPrefix(args[i], "--theme=") || strings.HasPrefix(args[i], "-theme=") {
 				promoted = append(promoted, args[i])
 			} else {
 				rest = append(rest, args[i])
@@ -669,6 +777,9 @@ func printResult(out string, err error) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	if currentInterfaceSettings().ascii() && !jsontext.Value(out).IsValid() {
+		out = interfaceASCIIReplacer.Replace(out)
+	}
 	fmt.Println(out)
 }
 
@@ -682,14 +793,15 @@ func printStatusJSON() {
 
 // printStations displays all available stations and usage information.
 func printStations() {
-	fmt.Print(logo)
-	fmt.Println(dim + "  available stations:" + reset)
+	palette := currentCLIPalette()
+	fmt.Print(palette.logo)
+	fmt.Println(palette.dim + "  available stations:" + palette.reset)
 	fmt.Println()
 	for _, s := range stationSnapshot() {
-		fmt.Printf("    %s%-16s%s  %s%s%s\n", cyan, s.Name, reset, dim, s.Desc, reset)
+		fmt.Printf("    %s%-16s%s  %s%s%s\n", palette.cyan, s.Name, palette.reset, palette.dim, s.Desc, palette.reset)
 	}
 	fmt.Println()
-	fmt.Println(dim + "  usage:" + reset)
+	fmt.Println(palette.dim + "  usage:" + palette.reset)
 	fmt.Println()
 	usage := [][2]string{
 		{"chill", "open the interactive REPL"},
@@ -712,7 +824,7 @@ func printStations() {
 		{"chill update", "install the latest release"},
 	}
 	for _, row := range usage {
-		fmt.Printf("    %s%-20s%s  %s%s%s\n", cyan, row[0], reset, dim, row[1], reset)
+		fmt.Printf("    %s%-20s%s  %s%s%s\n", palette.cyan, row[0], palette.reset, palette.dim, row[1], palette.reset)
 	}
 	fmt.Println()
 }
@@ -784,7 +896,8 @@ func saveStation(args []string) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("%s+ %s%s  %s%s%s", pink, s.Name, reset, dim, s.Desc, reset), nil
+	palette := currentCLIPalette()
+	return fmt.Sprintf("%s+ %s%s  %s%s%s", palette.pink, s.Name, palette.reset, palette.dim, s.Desc, palette.reset), nil
 }
 
 // findStation returns the station with the given name (case-insensitive),
@@ -806,5 +919,6 @@ func playForeground(s *Station) {
 		fmt.Fprintf(os.Stderr, "foreground playback: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(dim + "~ stay chill ~" + reset)
+	palette := currentCLIPalette()
+	fmt.Println(palette.dim + "~ stay chill ~" + palette.reset)
 }

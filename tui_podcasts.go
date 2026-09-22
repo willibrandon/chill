@@ -456,19 +456,8 @@ func (t *tui) podcastRefresh() tea.Cmd {
 func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := &t.podcasts
 	key := msg.String()
-	if key == "ctrl+q" {
-		return tea.Quit
-	}
-	if key == "f3" {
-		t.closePodcasts()
-		return nil
-	}
-	if key == "f4" {
-		t.closePodcasts()
-		t.openEqualizer()
-		return nil
-	}
 	if p.editing {
+		key = t.presentation.mapKey("editor", key)
 		switch key {
 		case "esc", "ctrl+c":
 			p.editing = false
@@ -489,8 +478,16 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	key = t.presentation.mapKey("podcasts", key)
 	rows := p.rows()
 	switch key {
+	case "ctrl+q":
+		return tea.Quit
+	case "f3":
+		t.closePodcasts()
+	case "f4":
+		t.closePodcasts()
+		t.openEqualizer()
 	case "esc", "b":
 		if p.cancel != nil {
 			p.cancel()
@@ -570,7 +567,11 @@ func (t *tui) podcastKey(msg tea.KeyPressMsg) tea.Cmd {
 			p.note = "Choose an episode to play"
 			return nil
 		}
-		action := map[string]string{"shift+left": "seek -30", "shift+right": "seek +30", "space": "toggle", "[": "speed -0.25", "]": "speed +0.25"}[key]
+		action := map[string]string{
+			"shift+left":  fmt.Sprintf("seek -%d", t.presentation.SeekLargeStep),
+			"shift+right": fmt.Sprintf("seek +%d", t.presentation.SeekLargeStep),
+			"space":       "toggle", "[": "speed -0.25", "]": "speed +0.25",
+		}[key]
 		if t.running {
 			if len(t.pending) > 0 && strings.HasPrefix(action, "seek ") && strings.HasPrefix(t.pending[len(t.pending)-1], "seek ") {
 				a, ae := seekDelta(strings.TrimPrefix(action, "seek "))
@@ -712,7 +713,8 @@ func (t *tui) podcastView() tea.View {
 	}
 	lines[0] = fit(styleHeading.Render(heading))
 	rows := p.rows()
-	room := max(0, height-6)
+	layout := t.contentLayout(height, p.editing, 2)
+	room := layout.room
 	first := max(0, min(p.page.selected-room/2, len(rows)-room))
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
@@ -727,38 +729,45 @@ func (t *tui) podcastView() tea.View {
 		lines[row+2] = style.Render(fit(prefix + text))
 	}
 	if room > 0 && len(rows) == 0 && !p.loading {
-		lines[2] = styleDim.Render(fit("  No results. Ctrl+F searches shows or opens an RSS URL."))
+		lines[2] = styleDim.Render(fit("  No results. " + t.presentation.bindingLabel("podcast.global-search") + " searches shows or opens an RSS URL."))
 	}
-	if height >= 5 {
+	if layout.note >= 0 {
 		note := p.note
 		if p.loading {
-			note = "Loading… Ctrl+C cancels"
+			note = "Loading… " + t.presentation.bindingHint("podcast.cancel", "cancels")
 		} else if note == "" {
 			note = fmt.Sprintf("%d items", len(rows))
 			if p.page.filter != "" {
 				note += " · filter: " + p.page.filter
 			}
 		}
-		lines[height-4] = fit(styleDim.Render(note))
-		if p.page.kind == "download-settings" {
-			lines[height-3] = fit(styleDim.Render("Enter/→ increase or toggle · ← decrease · automatic downloads apply on sync"))
-			lines[height-2] = fit(styleDim.Render("Esc back · F3 prompt"))
-		} else {
-			lines[height-3] = fit(styleDim.Render("Enter open/play · f subscribe · d download · D remove · R retry · P pin · / filter · Ctrl+R refresh/sync"))
-			lines[height-2] = fit(styleDim.Render("Shift+←/→ ±30s · Space pause · [ ] speed · q queue · l latest/all shows · v played · r restart · Esc back · F3 prompt"))
+		if t.presentation.Panels["metadata"] && len(rows) > 0 {
+			note += " · selected: " + p.rowText(rows[min(p.page.selected, len(rows)-1)])
 		}
-		if p.editing {
+		lines[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			if p.page.kind == "download-settings" {
+				lines[layout.firstHint] = fit(styleDim.Render(t.presentation.bindingHint("podcast.setting-next", "increase/toggle") + " · " + t.presentation.bindingHint("podcast.setting-previous", "decrease") + " · automatic downloads apply on sync"))
+				lines[layout.secondHint] = fit(styleDim.Render(t.presentation.bindingHint("browser.back", "back") + " · " + t.presentation.bindingHint("global.podcasts", "prompt")))
+			} else {
+				lines[layout.firstHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingHint("browser.select", "open/play"), t.presentation.bindingHint("browser.favorite", "subscribe"), t.presentation.bindingHint("podcast.download", "download"), t.presentation.bindingHint("podcast.remove-download", "remove"), t.presentation.bindingHint("podcast.retry-download", "retry"), t.presentation.bindingHint("podcast.pin-download", "pin"), t.presentation.bindingHint("browser.search", "filter"), t.presentation.bindingHint("browser.refresh", "refresh/sync")}, " · ")))
+				lines[layout.secondHint] = fit(styleDim.Render(strings.Join([]string{t.presentation.bindingPairHint("podcast.seek-back", "podcast.seek-forward", fmt.Sprintf("±%ds", t.presentation.SeekLargeStep)), t.presentation.bindingHint("browser.pause", "pause"), t.presentation.bindingPairHint("podcast.speed-down", "podcast.speed-up", "speed"), t.presentation.bindingHint("podcast.queue", "queue"), t.presentation.bindingHint("podcast.latest", "latest/all shows"), t.presentation.bindingHint("podcast.played-filter", "played"), t.presentation.bindingHint("podcast.restart", "restart"), t.presentation.bindingHint("browser.back", "back"), t.presentation.bindingHint("global.podcasts", "prompt")}, " · ")))
+			}
+		}
+		if p.editing && layout.input >= 0 {
 			p.input.SetWidth(max(1, width-3))
-			lines[height-2] = fit(p.input.View())
+			lines[layout.input] = fit(p.input.View())
 		}
-		lines[height-1] = t.statusBar()
+		if layout.status >= 0 {
+			lines[layout.status] = t.statusBar()
+		}
 	}
 	v := tea.NewView(strings.Join(lines, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	if p.editing && height >= 5 {
+	if p.editing && layout.input >= 0 {
 		if c := p.input.Cursor(); c != nil {
-			c.Y += height - 2
+			c.Y += layout.input
 			v.Cursor = c
 		}
 	}

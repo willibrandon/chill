@@ -31,7 +31,8 @@ func runHistoryCommand(args []string, colored bool) (string, error) {
 		case "--help", "-h", "help":
 			text := "Usage: chill history [--limit 0-200] [--json]\n       chill history clear"
 			if colored {
-				text = dim + text + reset
+				palette := currentCLIPalette()
+				text = palette.dim + text + palette.reset
 			}
 			return text, nil
 		default:

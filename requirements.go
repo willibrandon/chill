@@ -38,20 +38,21 @@ func (e *requirementsError) Error() string {
 
 // chill puts it the laid-back way, with how to fix it.
 func (e *requirementsError) chill() string {
+	palette := currentCLIPalette()
 	them := "it"
 	if len(e.missing) > 1 {
 		them = "them"
 	}
 
 	lines := []string{
-		purple + "  ~ no sound system yet ~" + reset,
+		palette.purple + "  ~ no sound system yet ~" + palette.reset,
 		"",
-		dim + "  chill uses mpv, FFmpeg and yt-dlp, and couldn't find " + strings.Join(e.missing, " or ") + "." + reset,
-		dim + "  no rush. grab " + them + " and come back, the beats will wait:" + reset,
+		palette.dim + "  chill uses mpv, FFmpeg and yt-dlp, and couldn't find " + strings.Join(e.missing, " or ") + "." + palette.reset,
+		palette.dim + "  no rush. grab " + them + " and come back, the beats will wait:" + palette.reset,
 		"",
 	}
 	for _, cmd := range installCommands(e.missing) {
-		lines = append(lines, "    "+cyan+cmd+reset)
+		lines = append(lines, "    "+palette.cyan+cmd+palette.reset)
 	}
 	return strings.Join(lines, "\n")
 }

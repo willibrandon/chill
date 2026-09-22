@@ -32,18 +32,20 @@ type providerSetupField struct {
 type providerSetupValidation struct{ err error }
 
 type providerSetupModel struct {
-	document providerDocument
-	secrets  providerSecretsDocument
-	provider string
-	fields   []providerSetupField
-	selected int
-	picker   bool
-	checking bool
-	done     bool
-	saved    bool
-	embedded bool
-	width    int
-	note     string
+	document     providerDocument
+	secrets      providerSecretsDocument
+	provider     string
+	fields       []providerSetupField
+	selected     int
+	picker       bool
+	checking     bool
+	done         bool
+	saved        bool
+	embedded     bool
+	width        int
+	height       int
+	note         string
+	presentation interfaceSettings
 }
 
 func runProviderSetup(initial string) (string, error) {
@@ -55,11 +57,11 @@ func runProviderSetup(initial string) (string, error) {
 	if initial != "" && !supportedProvider(initial) {
 		return "", fmt.Errorf("unknown provider %q", initial)
 	}
-	model := providerSetupModel{document: document, secrets: secrets, provider: initial, picker: initial == ""}
+	model := providerSetupModel{document: document, secrets: secrets, provider: initial, picker: initial == "", presentation: currentInterfaceSettings()}
 	if !model.picker {
 		model.openForm(initial)
 	}
-	result, err := tea.NewProgram(model).Run()
+	result, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	if err != nil {
 		return "", err
 	}
@@ -81,7 +83,7 @@ func (model providerSetupModel) Init() tea.Cmd { return nil }
 func (model providerSetupModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
-		model.width = message.Width
+		model.width, model.height = message.Width, message.Height
 		for i := range model.fields {
 			model.fields[i].input.SetWidth(min(64, max(20, model.width-24)))
 		}
@@ -110,7 +112,7 @@ func (model providerSetupModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Quit
 	case tea.KeyPressMsg:
 		if model.checking {
-			if message.String() == "ctrl+c" {
+			if model.presentation.mapKey("setup-form", message.String()) == "ctrl+c" {
 				return model, tea.Quit
 			}
 			return model, nil
@@ -124,7 +126,7 @@ func (model providerSetupModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (model providerSetupModel) updatePicker(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
+	switch model.presentation.mapKey("setup-picker", key.String()) {
 	case "ctrl+c", "q", "esc":
 		if model.embedded {
 			model.done = true
@@ -177,6 +179,7 @@ func (model *providerSetupModel) openForm(key string) {
 			input.EchoMode = textinput.EchoPassword
 			input.EchoCharacter = '•'
 		}
+		configureInterfaceInput(&input)
 		model.fields = append(model.fields, providerSetupField{key: fieldKey, label: label, placeholder: placeholder, secret: protected, input: input})
 	}
 	switch key {
@@ -215,7 +218,8 @@ func providerAPIURL(key string) string {
 }
 
 func (model providerSetupModel) updateForm(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
+	keyName := model.presentation.mapKey("setup-form", key.String())
+	switch keyName {
 	case "ctrl+c", "esc":
 		if model.embedded {
 			model.done = true
@@ -223,7 +227,7 @@ func (model providerSetupModel) updateForm(key tea.KeyPressMsg) (tea.Model, tea.
 		}
 		return model, tea.Quit
 	case "tab", "down", "enter":
-		if key.String() == "enter" && model.selected == len(model.fields)-1 {
+		if keyName == "enter" && model.selected == len(model.fields)-1 {
 			return model.beginValidation()
 		}
 		model.focus((model.selected + 1) % len(model.fields))
@@ -296,15 +300,21 @@ func normalizedProviderSetupValue(key, value string) string {
 func (model providerSetupModel) View() tea.View {
 	view := tea.View{AltScreen: true}
 	if model.done {
-		return view
+		return model.presentation.decorateView(view, model.width)
 	}
 	var body strings.Builder
 	body.WriteString(styleTitle.Bold(true).Render("chill provider setup"))
 	body.WriteString("\n\n")
 	if model.picker {
-		body.WriteString(styleDim.Render("Choose a provider. Enter configures it; d disables it."))
+		body.WriteString(styleDim.Render("Choose a provider. " + model.presentation.bindingHint("setup-picker.select", "configures it") + "; " + model.presentation.bindingHint("setup-picker.disable", "disables it") + "."))
 		body.WriteString("\n\n")
-		for i, provider := range supportedProviders {
+		room := len(supportedProviders)
+		if model.height > 0 {
+			room = max(1, model.height-7)
+		}
+		first := max(0, min(model.selected-room/2, len(supportedProviders)-room))
+		for i := first; i < min(len(supportedProviders), first+room); i++ {
+			provider := supportedProviders[i]
 			marker, style := "  ", styleInput
 			if i == model.selected {
 				marker, style = "› ", styleSelected
@@ -336,7 +346,7 @@ func (model providerSetupModel) View() tea.View {
 			fmt.Fprintf(&body, "%s%-18s %s\n", marker, field.label, field.input.View())
 		}
 		body.WriteString("\n")
-		body.WriteString(styleDim.Render("Tab moves · Ctrl+S validates and saves · Esc cancels"))
+		body.WriteString(styleDim.Render(strings.Join([]string{model.presentation.bindingHint("setup-form.next", "moves"), model.presentation.bindingHint("setup-form.save", "validates and saves"), model.presentation.bindingHint("setup-form.cancel", "cancels")}, " · ")))
 	}
 	if model.note != "" {
 		body.WriteString("\n\n")
@@ -347,9 +357,14 @@ func (model providerSetupModel) View() tea.View {
 		}
 	}
 	if model.width > 0 {
-		view.SetContent(lipgloss.NewStyle().Width(model.width).Padding(1, 2).Render(body.String()))
-		return view
+		content := lipgloss.NewStyle().Width(model.width).Padding(1, 2).Render(body.String())
+		if model.height > 0 {
+			lines := strings.Split(content, "\n")
+			content = strings.Join(lines[:min(len(lines), model.height)], "\n")
+		}
+		view.SetContent(content)
+		return model.presentation.decorateView(view, model.width)
 	}
 	view.SetContent(body.String())
-	return view
+	return model.presentation.decorateView(view, model.width)
 }

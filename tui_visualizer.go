@@ -23,17 +23,20 @@ type replVisualizer struct {
 }
 
 func (t *tui) visualizerHeight() int {
-	if !t.viz.enabled || t.help || t.eq.open || t.podcasts.open || t.height < 10 || t.width < 20 {
+	if !t.viz.enabled || t.help || t.eq.open || t.podcasts.open || t.presentation.Simplified || t.presentation.LowPower || t.presentation.VisualizerHeight == 0 || t.height < 10 || t.width < 20 {
+		return 0
+	}
+	if interfaceLayoutTier(t.width, t.height, false, t.presentation.Simplified) == "minimal" {
 		return 0
 	}
 	if t.viz.fullscreen {
 		return max(0, t.height-2)
 	}
-	room := t.height - 3 - t.paletteHeight() - 4
+	room := t.height - 3 - t.paletteHeight() - t.panelHeight() - 4
 	if room < 3 {
 		return 0
 	}
-	return min(10, room)
+	return min(t.presentation.VisualizerHeight, room)
 }
 
 // syncVisualizer runs after layout. There is at most one read in flight and no
@@ -41,6 +44,7 @@ func (t *tui) visualizerHeight() int {
 func (t *tui) syncVisualizer() tea.Cmd {
 	v := &t.viz
 	if t.visualizerHeight() == 0 {
+		v.focused, v.fullscreen = false, false
 		if v.stream != nil || v.connecting || v.waiting {
 			t.closeVisualizer()
 		}
@@ -142,13 +146,26 @@ func (t *tui) visualizerCommand(arg string) {
 		}
 		v.mode = i
 	}
+	if t.presentation.Simplified || t.presentation.LowPower {
+		v.enabled, v.focused, v.fullscreen = false, false, false
+		mode := "simplified"
+		if t.presentation.LowPower {
+			mode = "low-power"
+		}
+		t.print(styleDim.Render("  visualizer disabled in " + mode + " mode"))
+		return
+	}
 	v.enabled, v.focused = true, true
+	if t.width > 0 && t.height > 0 && t.visualizerHeight() == 0 {
+		v.focused, v.fullscreen = false, false
+		t.print(styleDim.Render("  visualizer unavailable at this size or configured height"))
+	}
 	t.sel, t.flashing, t.dragging = selection{}, false, false
 }
 
 func (t *tui) visualizerKey(msg tea.KeyPressMsg) tea.Cmd {
 	v := &t.viz
-	switch msg.String() {
+	switch t.presentation.mapKey("visualizer", msg.String()) {
 	case "f3":
 		return t.openPodcasts("")
 	case "f4":
@@ -189,8 +206,8 @@ func (t *tui) visualizerKey(msg tea.KeyPressMsg) tea.Cmd {
 func (t *tui) visualizerView(height int) string {
 	v := &t.viz
 	heading := fmt.Sprintf(" %s · %d/%d · post-EQ audio", visualizer.Modes[v.mode], v.mode+1, len(visualizer.Modes))
-	if v.focused && !v.fullscreen {
-		heading += " · v next · V full · Esc prompt"
+	if v.focused && !v.fullscreen && t.presentation.ShowHelp {
+		heading += " · " + t.presentation.bindingHint("visualizer.next", "next") + " · " + t.presentation.bindingHint("visualizer.fullscreen", "full") + " · " + t.presentation.bindingHint("visualizer.back", "prompt")
 	}
 	if v.state != "playing" {
 		state := v.state
@@ -215,5 +232,9 @@ func (t *tui) visualizerView(height int) string {
 }
 
 func (t *tui) visualizerFooter() string {
-	return styleDim.Render(ansi.Truncate(" v next · ← previous · V fullscreen · Space pause · Esc back · o off · Ctrl+Q quit", t.width, ""))
+	if !t.presentation.ShowHelp {
+		return ""
+	}
+	hints := []string{t.presentation.bindingHint("visualizer.next", "next"), t.presentation.bindingHint("visualizer.previous", "previous"), t.presentation.bindingHint("visualizer.fullscreen", "fullscreen"), t.presentation.bindingHint("visualizer.pause", "pause"), t.presentation.bindingHint("visualizer.back", "back"), t.presentation.bindingHint("visualizer.disable", "off"), t.presentation.bindingHint("global.quit", "quit")}
+	return styleDim.Render(ansi.Truncate(" "+strings.Join(hints, " · "), t.width, ""))
 }

@@ -152,7 +152,11 @@ func runRemoteCommand(ctx context.Context, args []string) (string, error) {
 				EQBands: settings.equalizer().activeBands(),
 				Audio:   settings.Audio.status(settings.Audio.Device),
 			}
-			snapshot := remoteSnapshot{Playback: playback, Library: library, Podcasts: podcasts, Providers: registry.list(ctx, false)}
+			interfaceState, interfaceErr := loadInterfaceSettings()
+			if interfaceErr != nil {
+				interfaceState = defaultInterfaceSettings()
+			}
+			snapshot := remoteSnapshot{Playback: playback, Library: library, Podcasts: podcasts, Providers: registry.list(ctx, false), Interface: interfaceState}
 			return marshalRemoteOutput(remoteResponse{Version: remoteVersion, ID: "state", OK: true, Snapshot: &snapshot})
 		}
 		response, err := sendRemoteRequestContext(ctx, remoteRequest{ID: "state", Method: "state.get"})

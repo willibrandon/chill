@@ -13,13 +13,14 @@ import (
 )
 
 func radioHelp(colored bool) string {
+	palette := currentCLIPalette()
 	var b strings.Builder
 	usage := "Usage: chill radio [command] [options]"
 	if colored {
-		usage = dim + usage + reset
+		usage = palette.dim + usage + palette.reset
 	}
 	fmt.Fprintln(&b, usage)
-	printStyledHelpSection(&b, "Commands", [][2]string{
+	printStyledHelpSectionWithPalette(&b, "Commands", [][2]string{
 		{"(no command)", "open the radio browser"},
 		{"top", "most-voted stations"},
 		{"popular", "most-listened stations"},
@@ -35,8 +36,8 @@ func radioHelp(colored bool) string {
 		{"unfavorite <url>", "remove a favorite"},
 		{"play <url> [name]", "play a stream directly"},
 		{"nearby <code|auto|none|ask>", "configure local country suggestions"},
-	}, colored)
-	printStyledHelpSection(&b, "Options", [][2]string{
+	}, colored, palette)
+	printStyledHelpSectionWithPalette(&b, "Options", [][2]string{
 		{"--sort <order>", "top, popular, trending, name, or random"},
 		{"--state <name>", "restrict a country to one region"},
 		{"--language <name>", "restrict results by language"},
@@ -47,7 +48,7 @@ func radioHelp(colored bool) string {
 		{"--fg", "play the selected result in the foreground"},
 		{"--json", "print machine-readable results"},
 		{"--help", "show this help"},
-	}, colored)
+	}, colored, palette)
 	return strings.TrimRight(b.String(), "\n")
 }
 

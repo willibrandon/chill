@@ -19,6 +19,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/willibrandon/chill/internal/podcast"
 )
@@ -28,8 +29,6 @@ const (
 	minPaletteRoom  = 3    // rows that must be free before suggestions are shown
 	minPaletteLines = 8    // terminal height below which suggestions are hidden
 	maxTranscript   = 1000 // lines kept in the transcript
-
-	banner = "chill  type a station, path, or command · F2 visualizer · F3 podcasts · F4 equalizer · F5 radio · F6 lyrics · F7 library · F8 providers · F9 audio · F1 help"
 )
 
 var (
@@ -98,21 +97,27 @@ type tui struct {
 	task           *replTask
 	cancelling     bool
 
-	help         bool           // the help screen is showing
-	helpView     viewport.Model // scrolls the help screen
-	viz          replVisualizer
-	eq           replEqualizer
-	podcasts     podcastBrowser
-	podcastStart *string
-	radio        radioBrowser
-	radioStart   bool
-	radioFG      bool
-	radioChoice  *Station
-	lyrics       replLyrics
-	libraryUI    libraryBrowser
-	libraryStart bool
-	providersUI  providerBrowser
-	audioUI      audioBrowser
+	help            bool           // the help screen is showing
+	helpView        viewport.Model // scrolls the help screen
+	viz             replVisualizer
+	eq              replEqualizer
+	podcasts        podcastBrowser
+	podcastStart    *string
+	radio           radioBrowser
+	radioStart      bool
+	radioFG         bool
+	radioChoice     *Station
+	lyrics          replLyrics
+	libraryUI       libraryBrowser
+	libraryStart    bool
+	providersUI     providerBrowser
+	audioUI         audioBrowser
+	presentation    interfaceSettings
+	terminalProfile colorprofile.Profile
+	appearance      appearanceBrowser
+	keyOverlay      keyOverlay
+	panelLibrary    *podcastLibrary
+	panelLoading    bool
 }
 
 func newTUI() *tui {
@@ -126,22 +131,18 @@ func newTUI() *tui {
 	input.KeyMap.NextSuggestion = key.NewBinding(key.WithDisabled())
 	input.KeyMap.PrevSuggestion = key.NewBinding(key.WithDisabled())
 
-	styles := input.Styles()
-	styles.Focused.Text = styleInput
-	styles.Focused.Suggestion = styleDim
-	styles.Cursor.Color = lipgloss.Color("#61AFEF")
-	styles.Cursor.Shape = tea.CursorBlock
-	styles.Cursor.Blink = false
-	input.SetStyles(styles)
+	settings := currentInterfaceSettings()
+	configureInterfaceInput(&input)
 
 	h := loadHistory()
 	t := &tui{
-		viewport: viewport.New(),
-		helpView: viewport.New(),
-		input:    input,
-		history:  h,
-		histPos:  len(h.lines),
-		eq:       replEqualizer{config: defaultEqualizerConfig()},
+		viewport:     viewport.New(),
+		helpView:     viewport.New(),
+		input:        input,
+		history:      h,
+		histPos:      len(h.lines),
+		eq:           replEqualizer{config: defaultEqualizerConfig()},
+		presentation: settings,
 	}
 	t.viewport.MouseWheelDelta = 3
 	t.helpView.SoftWrap = true
@@ -153,15 +154,35 @@ func newTUI() *tui {
 // Init starts status polling and opens any requested podcast browser.
 func (t *tui) Init() tea.Cmd {
 	if t.libraryStart {
-		return tea.Batch(pollStatus, t.openLibrary())
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openLibrary())
 	}
 	if t.radioStart {
-		return tea.Batch(pollStatus, t.openRadio())
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openRadio())
 	}
 	if t.podcastStart != nil {
-		return tea.Batch(pollStatus, t.openPodcasts(*t.podcastStart))
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openPodcasts(*t.podcastStart))
 	}
-	return pollStatus
+	switch t.presentation.DefaultScreen {
+	case "visualizer":
+		t.visualizerCommand("")
+	case "podcasts":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openPodcasts(""))
+	case "equalizer":
+		t.openEqualizer()
+	case "radio":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openRadio())
+	case "lyrics":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openLyrics())
+	case "library":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openLibrary())
+	case "providers":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openProviders())
+	case "audio":
+		return tea.Batch(pollStatus, t.refreshInterfacePanel(), t.openAudio())
+	case "interface":
+		t.openAppearance()
+	}
+	return tea.Batch(pollStatus, t.refreshInterfacePanel())
 }
 
 // pollStatus asks the daemon what it is doing, once a second.
@@ -193,6 +214,17 @@ func (t *tui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (t *tui) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case tea.ColorProfileMsg:
+		if t.presentation.ColorMode == "auto" {
+			t.terminalProfile = msg.Profile
+		}
+		return nil
+	case interfacePanelMsg:
+		t.panelLoading = false
+		if msg.library != nil {
+			t.panelLibrary = msg.library
+		}
+		return nil
 	case lyricsResultMsg:
 		return t.lyricsResult(msg)
 	case radioResultMsg:
@@ -201,7 +233,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return t.podcastResult(msg)
 	case libraryResultMsg:
 		cmd := t.libraryResult(msg)
-		if t.libraryUI.open && !t.libraryUI.loading && msg.err == nil && msg.note != "" {
+		if t.libraryUI.open && !t.libraryUI.loading && msg.err == nil && msg.reload {
 			return tea.Batch(cmd, t.loadLibraryPage())
 		}
 		return cmd
@@ -235,6 +267,12 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		rewrap := msg.Width != t.width
 		t.width, t.height = msg.Width, msg.Height
+		if t.providersUI.setup != nil {
+			updated, _ := t.providersUI.setup.Update(msg)
+			setup := updated.(providerSetupModel)
+			t.providersUI.setup = &setup
+		}
+		t.refreshInterfaceBanner()
 		if rewrap {
 			t.wrap()
 		}
@@ -289,10 +327,14 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		if t.lyrics.open && !t.lyrics.loading && msg.status != nil && msg.status.NowPlaying != nil && msg.status.NowPlaying.Raw != t.lyrics.raw {
 			lyricUpdate = t.openLyrics()
 		}
-		if !msg.poll {
-			return lyricUpdate
+		var panelUpdate tea.Cmd
+		if t.panelHeight() > 0 && t.presentation.Panels["downloads"] {
+			panelUpdate = t.refreshInterfacePanel()
 		}
-		return tea.Batch(lyricUpdate, tea.Tick(time.Second, func(time.Time) tea.Msg { return pollStatus() }))
+		if !msg.poll {
+			return tea.Batch(lyricUpdate, panelUpdate)
+		}
+		return tea.Batch(lyricUpdate, panelUpdate, tea.Tick(t.statusPollInterval(), func(time.Time) tea.Msg { return pollStatus() }))
 
 	case outputMsg:
 		if msg.id != t.commandID || t.task == nil {
@@ -316,6 +358,7 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 			t.task.cancel()
 			t.task = nil
 		}
+		completed := t.active
 		t.cancelling = false
 		t.running = false
 		t.active = ""
@@ -341,12 +384,23 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		} else if msg.err != nil {
 			t.print(styleError.Render("  error: ") + msg.err.Error())
 		}
+		var presentationCommand tea.Cmd
+		if msg.err == nil && (completed == "theme" || completed == "keys" || completed == "interface") {
+			if settings, err := loadInterfaceSettings(); err == nil {
+				t.presentation, _, _ = activateInterfaceSettings(settings)
+				t.enforcePresentationMode()
+				t.configureInputs()
+				t.refreshInterfaceBanner()
+				t.wrap()
+				presentationCommand = t.interfaceColorProfileCommand()
+			}
+		}
 		if len(t.pending) > 0 {
 			next := t.pending[0]
 			t.pending = t.pending[1:]
-			return tea.Batch(t.start(next), refreshStatus)
+			return tea.Batch(t.start(next), refreshStatus, presentationCommand)
 		}
-		return refreshStatus
+		return tea.Batch(refreshStatus, presentationCommand)
 
 	case tea.MouseWheelMsg:
 		if t.audioUI.open {
@@ -429,47 +483,14 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 		return t.mouse(msg.(tea.MouseMsg))
 
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "f7":
-			if t.libraryUI.open {
-				t.closeLibrary()
-				return nil
-			}
-			return t.openLibrary()
-		case "f8":
-			if t.providersUI.open {
-				t.closeProviders()
-				return nil
-			}
-			return t.openProviders()
-		case "f9":
-			if t.audioUI.open {
-				t.closeAudio()
-				return nil
-			}
-			return t.openAudio()
-		case "f5":
-			if t.radio.open {
-				t.closeRadio()
-				return nil
-			}
-			t.closeLyrics()
-			t.closePodcasts()
-			t.closeEqualizer()
-			t.closeLibrary()
-			t.help = false
-			return t.openRadio()
-		case "f6":
-			if t.lyrics.open {
-				t.closeLyrics()
-				return nil
-			}
-			t.closeRadio()
-			t.closePodcasts()
-			t.closeEqualizer()
-			t.closeLibrary()
-			t.help = false
-			return t.openLyrics()
+		if command, handled := t.handleGlobalKey(msg); handled {
+			return command
+		}
+		if t.keyOverlay.open {
+			return t.keyOverlayKey(msg)
+		}
+		if t.appearance.open {
+			return t.appearanceKey(msg)
 		}
 		if t.lyrics.open {
 			return t.lyricsKey(msg)
@@ -515,8 +536,9 @@ func (t *tui) update(msg tea.Msg) tea.Cmd {
 // promptKey handles a key press at the prompt.
 func (t *tui) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	open := t.paletteOpen()
+	pressed := t.presentation.mapKey("prompt", msg.String())
 
-	switch msg.String() {
+	switch pressed {
 	case "f9":
 		return t.openAudio()
 	case "f8":
@@ -644,7 +666,7 @@ func (t *tui) edited() {
 
 // helpKey handles a key press on the help screen, which swallows typing.
 func (t *tui) helpKey(msg tea.KeyPressMsg) tea.Cmd {
-	switch msg.String() {
+	switch t.presentation.mapKey("help", msg.String()) {
 	case "ctrl+q":
 		return tea.Quit
 	case "ctrl+c":
@@ -699,6 +721,13 @@ func (t *tui) submit() tea.Cmd {
 	if words[0] == "eq" && len(words) == 1 {
 		t.openEqualizer()
 		return nil
+	}
+	if (words[0] == "theme" || words[0] == "interface") && len(words) == 1 {
+		t.openAppearance()
+		return nil
+	}
+	if words[0] == "keys" && len(words) == 1 {
+		return t.toggleKeyOverlay()
 	}
 
 	switch strings.ToLower(line) {
@@ -862,7 +891,7 @@ func (t *tui) clear() {
 	t.lines, t.rows = nil, nil
 	t.activeLine, t.activeRow, t.activeExtraRow = -1, -1, false
 	t.sel, t.flashing = selection{}, false
-	t.print(styleDim.Render(banner))
+	t.print(styleDim.Render(t.interfaceBanner()))
 }
 
 // setInput replaces what is in the prompt and puts the cursor at the end.
@@ -936,7 +965,7 @@ func (t *tui) paletteOpen() bool {
 
 // paletteRows is how many suggestions fit on screen, 0 when there is no room.
 func (t *tui) paletteRows() int {
-	if len(t.suggestions) == 0 || t.height < minPaletteLines {
+	if t.presentation.Simplified || interfaceLayoutTier(t.width, t.height, false, t.presentation.Simplified) == "minimal" || len(t.suggestions) == 0 || t.height < minPaletteLines {
 		return 0
 	}
 	// the rule, the prompt, the status bar, the border and a line of transcript
@@ -980,63 +1009,101 @@ func (t *tui) fit() {
 	// the last column is the scrollbar's
 	follow := t.viewport.AtBottom()
 	t.viewport.SetWidth(max(t.width-1, 1))
-	t.viewport.SetHeight(max(t.height-3-t.paletteHeight()-t.visualizerHeight(), 1))
+	statusHeight := 0
+	if t.presentation.ShowStatus {
+		statusHeight = 1
+	}
+	t.viewport.SetHeight(max(t.height-2-statusHeight-t.paletteHeight()-t.visualizerHeight()-t.panelHeight(), 1))
 	if follow || t.viewport.PastBottom() {
 		t.viewport.GotoBottom()
 	}
 
 	// the heading, the rule and the footer
 	t.helpView.SetWidth(max(t.width-1, 1))
-	t.helpView.SetHeight(max(t.height-3, 1))
+	helpFooter := 0
+	if t.presentation.ShowHelp {
+		helpFooter = 1
+	}
+	t.helpView.SetHeight(max(t.height-2-helpFooter, 1))
 }
 
 // View renders the active REPL, help, podcast, or visualizer screen.
 func (t *tui) View() tea.View {
+	if t.width > 0 && t.height > 0 && interfaceLayoutTier(t.width, t.height, false, t.presentation.Simplified) == "too-small" {
+		lines := make([]string, t.height)
+		lines[0] = styleError.Render(ansi.Truncate(fmt.Sprintf("resize: %dx%d", t.width, t.height), t.width, ""))
+		if t.height > 1 {
+			lines[1] = styleDim.Render(ansi.Truncate("minimum 40x10", t.width, ""))
+		}
+		view := tea.NewView(strings.Join(lines, "\n"))
+		view.AltScreen = true
+		return t.decoratedView(view)
+	}
+	if t.keyOverlay.open {
+		return t.decoratedView(t.keyOverlayView())
+	}
+	if t.appearance.open {
+		return t.decoratedView(t.appearanceView())
+	}
 	if t.audioUI.open {
-		return t.audioView()
+		return t.decoratedView(t.audioView())
 	}
 	if t.providersUI.open {
-		return t.providerView()
+		return t.decoratedView(t.providerView())
 	}
 	if t.libraryUI.open {
-		return t.libraryView()
+		return t.decoratedView(t.libraryView())
 	}
 	if t.lyrics.open {
-		return t.lyricsView()
+		return t.decoratedView(t.lyricsView())
 	}
 	if t.radio.open {
-		return t.radioView()
+		return t.decoratedView(t.radioView())
 	}
 	if t.podcasts.open {
-		return t.podcastView()
+		return t.decoratedView(t.podcastView())
 	}
 	if t.eq.open {
-		return t.equalizerView()
+		return t.decoratedView(t.equalizerView())
 	}
 	var v tea.View
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	if t.width == 0 {
-		return v
+		return t.decoratedView(v)
 	}
 
 	rule := strings.Repeat("─", t.width)
 
 	if t.help {
-		v.SetContent(strings.Join([]string{
+		parts := []string{
 			styleHeading.Render("help"),
 			rule,
 			withScrollbar(t.helpView),
-			styleDim.Render("Esc back · PgUp/PgDn scroll"),
-		}, "\n"))
-		return v
+		}
+		if t.presentation.ShowHelp {
+			parts = append(parts, styleDim.Render(t.presentation.bindingHint("help.close", "back")+" · "+t.presentation.bindingHint("help.page-down", "scroll")))
+		}
+		v.SetContent(strings.Join(parts, "\n"))
+		return t.decoratedView(v)
 	}
 	if t.viz.fullscreen && t.visualizerHeight() > 0 {
-		v.SetContent(strings.Join([]string{t.visualizerView(t.height - 2), t.visualizerFooter(), t.statusBar()}, "\n"))
-		return v
+		var bottom []string
+		if footer := t.visualizerFooter(); footer != "" {
+			bottom = append(bottom, footer)
+		}
+		if t.presentation.ShowStatus {
+			bottom = append(bottom, t.statusBar())
+		}
+		parts := append([]string{t.visualizerView(max(1, t.height-len(bottom)))}, bottom...)
+		v.SetContent(strings.Join(parts, "\n"))
+		return t.decoratedView(v)
 	}
 
 	parts := []string{withScrollbar(t.viewport)}
+	if panels := t.panelView(); panels != "" {
+		parts = append(parts, panels)
+	}
 	if height := t.visualizerHeight(); height > 0 {
 		parts = append(parts, t.visualizerView(height))
 	}
@@ -1044,14 +1111,17 @@ func (t *tui) View() tea.View {
 	if t.paletteOpen() {
 		parts = append(parts, t.palette())
 	}
-	parts = append(parts, t.input.View(), t.statusBar())
+	parts = append(parts, t.input.View())
+	if t.presentation.ShowStatus {
+		parts = append(parts, t.statusBar())
+	}
 	v.SetContent(strings.Join(parts, "\n"))
 
 	if c := t.input.Cursor(); c != nil && !t.viz.focused {
-		c.Y += t.viewport.Height() + 1 + t.paletteHeight() + t.visualizerHeight()
+		c.Y += t.viewport.Height() + 1 + t.paletteHeight() + t.visualizerHeight() + t.panelHeight()
 		v.Cursor = c
 	}
-	return v
+	return t.decoratedView(v)
 }
 
 // withScrollbar renders a viewport with a scrollbar in the column after it,
@@ -1129,7 +1199,10 @@ func column(s string, width int) string {
 
 // statusBar renders the bottom line: playback on the left, keys on the right.
 func (t *tui) statusBar() string {
-	facts := statusFacts(t.status)
+	if !t.presentation.ShowStatus {
+		return ""
+	}
+	facts := t.interfaceStatusFacts()
 	if t.running {
 		action := "Running "
 		if t.cancelling {
@@ -1138,34 +1211,38 @@ func (t *tui) statusBar() string {
 		facts = append([]string{t.spinner.View() + " " + action + t.active + "..."}, facts...)
 	}
 
-	hints := []string{"F2 visualizer", "F3 podcasts", "F4 equalizer", "F5 radio", "F6 lyrics", "F7 library", "F8 providers", "F9 audio", "F1 help", "Tab complete", "Shift+↑ select", "Ctrl+Q quit"}
+	p := t.presentation
+	hints := []string{p.bindingHint("global.interface", "interface"), p.bindingHint("global.keys", "keys"), p.bindingHint("global.help", "help"), p.bindingHint("prompt.complete", "complete"), p.bindingHint("global.quit", "quit")}
 	switch {
 	case t.audioUI.open:
-		hints = []string{"F9 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.audio", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.providersUI.open:
-		hints = []string{"F8 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.providers", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.libraryUI.open:
-		hints = []string{"F7 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.library", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.lyrics.open:
-		hints = []string{"F6 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.lyrics", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.radio.open:
-		hints = []string{"F5 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.radio", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.podcasts.open:
-		hints = []string{"F3 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.podcasts", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.eq.open:
-		hints = []string{"e preset", "←/→ band", "↑/↓ gain", "F4 prompt", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("equalizer.next-preset", "preset"), p.bindingHint("equalizer.right", "band"), p.bindingHint("equalizer.raise", "gain"), p.bindingHint("global.equalizer", "prompt"), p.bindingHint("global.quit", "quit")}
 	case t.viz.focused:
-		hints = []string{"v next", "V fullscreen", "Esc prompt", "o off", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("visualizer.next", "next"), p.bindingHint("visualizer.fullscreen", "fullscreen"), p.bindingHint("visualizer.back", "prompt"), p.bindingHint("visualizer.disable", "off"), p.bindingHint("global.quit", "quit")}
 	case t.sel.active && t.sel.lines:
-		hints = []string{"Shift+↑↓ extend", "y yank", "Esc cancel"}
+		hints = []string{p.bindingHint("selection.down", "extend"), p.bindingHint("selection.copy", "yank"), p.bindingHint("selection.cancel", "cancel")}
 	case t.sel.active:
-		hints = []string{"y yank", "Esc cancel"}
+		hints = []string{p.bindingHint("selection.copy", "yank"), p.bindingHint("selection.cancel", "cancel")}
 	case t.task != nil:
-		hints = []string{"F1 help", "Ctrl+C cancel", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.help", "help"), p.bindingHint("prompt.cancel-command", "cancel"), p.bindingHint("global.quit", "quit")}
 	case t.running:
-		hints = []string{"F1 help", "Ctrl+Q quit"}
+		hints = []string{p.bindingHint("global.help", "help"), p.bindingHint("global.quit", "quit")}
 	case t.paletteOpen() && t.navigated:
-		hints = []string{"F1 help", "Esc dismiss", "Ctrl+Q quit", "Enter accepts"}
+		hints = []string{p.bindingHint("global.help", "help"), p.bindingHint("prompt.cancel", "dismiss"), p.bindingHint("global.quit", "quit"), p.bindingHint("prompt.submit", "accepts")}
+	}
+	if !t.presentation.ShowHelp {
+		hints = nil
 	}
 
 	// what was just copied goes in front of the hints
@@ -1190,30 +1267,35 @@ func (t *tui) statusBar() string {
 }
 
 // helpBody is what the help screen shows under its heading.
-func helpBody() string {
+func helpBody(settings ...interfaceSettings) string {
+	presentation := currentInterfaceSettings()
+	if len(settings) > 0 {
+		presentation = settings[0]
+	}
 	keys := [][2]string{
-		{"F2", "focus the visualizer (Esc returns to the prompt)"},
-		{"F3", "open podcasts or return to the prompt"},
-		{"F4", "open the ten-band equalizer or return to the prompt"},
-		{"F5", "open radio discovery or return to the prompt"},
-		{"F6", "show lyrics for the current track"},
-		{"F7", "open the queue, playlists, history, and local files"},
-		{"F8", "search and browse connected music providers"},
-		{"F9", "change audio devices and quality profiles"},
-		{"v / V", "next visualizer / fullscreen while visualizer is focused"},
-		{"Tab", "complete with the highlighted suggestion"},
-		{"→", "take the ghost text"},
-		{"↑ / ↓", "pick a suggestion, otherwise walk through history"},
-		{"Enter", "run the line, or take a suggestion picked with ↑ / ↓"},
-		{"Esc", "dismiss the suggestions"},
-		{"Ctrl+P / Ctrl+N", "walk through history"},
-		{"PgUp / PgDn", "scroll the transcript, so does the mouse wheel"},
-		{"Shift+↑ / ↓", "select lines of the transcript"},
-		{"y / Enter / Ctrl+C", "copy what is selected"},
+		{presentation.bindingLabel("global.visualizer"), "focus the visualizer"},
+		{presentation.bindingLabel("global.podcasts"), "open podcasts or return to the prompt"},
+		{presentation.bindingLabel("global.equalizer"), "open the ten-band equalizer or return to the prompt"},
+		{presentation.bindingLabel("global.radio"), "open radio discovery or return to the prompt"},
+		{presentation.bindingLabel("global.lyrics"), "show lyrics for the current track"},
+		{presentation.bindingLabel("global.library"), "open the queue, playlists, history, and local files"},
+		{presentation.bindingLabel("global.providers"), "search and browse connected music providers"},
+		{presentation.bindingLabel("global.audio"), "change audio devices and quality profiles"},
+		{presentation.bindingLabel("global.interface"), "preview and configure the terminal interface"},
+		{presentation.bindingLabel("global.keys"), "search the active keybindings"},
+		{presentation.bindingLabel("prompt.complete"), "complete with the highlighted suggestion"},
+		{presentation.bindingLabel("prompt.ghost"), "take the ghost text"},
+		{presentation.bindingLabel("prompt.suggestion-next"), "pick a suggestion, otherwise walk through history"},
+		{presentation.bindingLabel("prompt.submit"), "run the line or accept a selected suggestion"},
+		{presentation.bindingLabel("prompt.cancel"), "dismiss the suggestions"},
+		{presentation.bindingLabel("prompt.history-previous") + "/" + presentation.bindingLabel("prompt.history-next"), "walk through history"},
+		{presentation.bindingLabel("prompt.page-up") + "/" + presentation.bindingLabel("prompt.page-down"), "scroll the transcript, as does the mouse wheel"},
+		{presentation.bindingLabel("prompt.select-lines"), "select lines of the transcript"},
+		{presentation.bindingLabel("selection.copy"), "copy what is selected"},
 		{"mouse", "drag to select, right click to copy, or to paste"},
-		{"Ctrl+C", "cancel diagnostics and queued commands, otherwise clear the line"},
-		{"Ctrl+L", "clear the screen"},
-		{"Ctrl+Q", "quit, music keeps playing"},
+		{presentation.bindingLabel("prompt.cancel-command"), "cancel diagnostics and queued commands, otherwise clear the line"},
+		{presentation.bindingLabel("prompt.clear"), "clear the screen"},
+		{presentation.bindingLabel("global.quit"), "quit, music keeps playing"},
 	}
 
 	var b strings.Builder
@@ -1238,6 +1320,10 @@ func helpBody() string {
 	for _, k := range keys {
 		row(k[0], k[1])
 	}
+	fmt.Fprintf(&b, "\n  %s\n", styleDim.Render("effective bindings"))
+	for _, binding := range interfaceKeyRows(presentation, "prompt", "") {
+		fmt.Fprintf(&b, "  %s\n", binding)
+	}
 	return b.String()
 }
 
@@ -1247,19 +1333,20 @@ func runRepl(podcastQuery ...string) {
 	if len(podcastQuery) > 0 {
 		model.podcastStart = &podcastQuery[0]
 	}
-	_, err := tea.NewProgram(model).Run()
+	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(dim + "~ stay chill ~" + reset)
+	palette := currentCLIPalette()
+	fmt.Println(palette.dim + "~ stay chill ~" + palette.reset)
 }
 
 func runReplRadio(foreground bool) {
 	model := newTUI()
 	model.radioStart, model.radioFG = true, foreground
-	_, err := tea.NewProgram(model).Run()
+	_, err := tea.NewProgram(model, interfaceProgramOptions(model.presentation)...).Run()
 	model.shutdown()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1272,5 +1359,6 @@ func runReplRadio(foreground bool) {
 			return
 		}
 	}
-	fmt.Println(dim + "~ stay chill ~" + reset)
+	palette := currentCLIPalette()
+	fmt.Println(palette.dim + "~ stay chill ~" + palette.reset)
 }

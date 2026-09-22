@@ -23,8 +23,11 @@ codes include `invalid_request`, `invalid_version`, `invalid_params`,
 `unknown_operation`, `not_found`, `conflict`, `canceled`, `unavailable`, and
 `internal_error`.
 
-`state.get` returns playback, queue, settings, library, podcast downloads, and
-provider capabilities in one snapshot. `capabilities` returns every supported
+`state.get` returns playback, queue, settings, library, podcast downloads,
+provider capabilities, and the terminal interface profile in one snapshot.
+`settings.interface` reads or atomically updates themes, capability fallbacks,
+layouts, panels, status content, seek increments, browser defaults, and scoped
+keybindings. `capabilities` returns every supported
 operation and event topic. Long-running operations are jobs with queued,
 running, succeeded, failed, or canceled state, progress from 0 to 1, and a
 bounded retention window.

@@ -127,7 +127,7 @@ func (browser *audioBrowser) rows() []audioBrowserRow {
 
 func (t *tui) audioKey(message tea.KeyPressMsg) tea.Cmd {
 	browser := &t.audioUI
-	key := message.String()
+	key := t.presentation.mapKey("audio", message.String())
 	if key == "ctrl+q" {
 		return tea.Quit
 	}
@@ -243,7 +243,8 @@ func (t *tui) audioView() tea.View {
 	lines := make([]string, height)
 	fit := func(value string) string { return ansi.Truncate(value, width, "") }
 	lines[0] = fit(styleHeading.Render("Audio Output"))
-	rows, room := browser.rows(), max(0, height-6)
+	layout := t.contentLayout(height, false, 2)
+	rows, room := browser.rows(), layout.room
 	first := max(0, min(browser.selected-room/2, len(rows)-room))
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
@@ -258,17 +259,21 @@ func (t *tui) audioView() tea.View {
 		}
 		lines[row+2] = style.Render(fit(prefix + mark + entry.label))
 	}
-	if height >= 5 {
+	if layout.note >= 0 {
 		note := browser.note
 		if browser.loading {
 			note = "Applying audio settings…"
 		} else if note == "" {
 			note = formatAudioSettings(browser.settings)
 		}
-		lines[height-4] = fit(styleDim.Render(note))
-		lines[height-3] = fit(styleDim.Render("Enter choose · ←/→ adjust advanced values · Ctrl+R refresh devices"))
-		lines[height-2] = fit(styleDim.Render("Changes preserve the queue and playhead · Esc back · F9 prompt"))
-		lines[height-1] = t.statusBar()
+		lines[layout.note] = fit(styleDim.Render(note))
+		if layout.showHelp {
+			lines[layout.firstHint] = fit(styleDim.Render(t.presentation.bindingHint("audio.adjust-right", "choose/adjust") + " · " + t.presentation.bindingHint("audio.adjust-left", "previous") + " · " + t.presentation.bindingHint("browser.refresh", "refresh devices")))
+			lines[layout.secondHint] = fit(styleDim.Render("Changes preserve the queue and playhead · " + t.presentation.bindingHint("browser.back", "back") + " · " + t.presentation.bindingHint("global.audio", "prompt")))
+		}
+		if layout.status >= 0 {
+			lines[layout.status] = t.statusBar()
+		}
 	}
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true

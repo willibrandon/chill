@@ -99,6 +99,11 @@ chill remote state                # read the complete runtime snapshot
 chill remote events runtime.queue # stream revisioned queue events
 chill link register               # register secure chill:// links
 chill completion zsh              # generate shell completion
+chill theme set "High Contrast"   # select a contrast-tested terminal theme
+chill keys search favorite        # find active keybindings
+chill interface panel queue off   # hide an optional full-layout panel
+chill --theme Paper --simplified  # use accessible session-only presentation
+chill --no-color --fg             # foreground playback without ANSI color
 chill --toggle                    # pause/resume, or play the default station when stopped
 chill --vol 60                    # set volume (also +5, -10, up, down)
 chill eq Rock                     # select an equalizer preset
@@ -222,7 +227,26 @@ Quitting also cancels diagnostics; music keeps playing.
 | `F7` | browse the universal queue, saved playlists, local files, favorites, bookmarks, and recent media |
 | `F8` | browse and search providers or return to the prompt |
 | `F9` | configure audio profiles and output devices or return to the prompt |
+| `F10` | preview themes, layouts, panels, and accessibility settings |
+| `Ctrl+K` | search the effective keybindings for the current screen |
 | `Ctrl+Q` | quit, music keeps playing |
+
+### Terminal interface
+
+Chill adapts between full, content-first, compact, and minimal layouts. It has
+dark, light, high-contrast, monochrome, and color-blind-friendly built-in
+themes, validated user themes, optional information panels, remappable scoped
+keys, and true-color, ANSI-256, ANSI-16, no-color, Unicode, and ASCII modes.
+Simplified and low-power modes reduce decoration, motion, polling, and redraws.
+
+Press **F10** for live preview and **Ctrl+K** for the searchable binding
+overlay. Use `chill theme`, `chill keys`, and `chill interface` for the same
+settings from scripts. `--theme`, `--no-color`, `--simplified`, and
+`--low-power` are session-only overrides and work with both the REPL and
+`--fg`.
+
+See [Terminal interface](docs/interface.md) for custom theme files, contrast
+rules, layout thresholds, every configurable setting, and scoped key remapping.
 
 ### Equalizer
 

@@ -112,3 +112,26 @@ func TestRemoteRejectsInvalidEnvelope(t *testing.T) {
 		t.Fatalf("conflict code = %q", code)
 	}
 }
+
+// TestRemoteInterfaceSettings checks discovery and validated durable mutation.
+func TestRemoteInterfaceSettings(t *testing.T) {
+	withConfigDir(t)
+	found := false
+	for _, capability := range remoteCapabilities {
+		found = found || capability.Name == "settings.interface"
+	}
+	if !found {
+		t.Fatal("settings.interface is missing from capability discovery")
+	}
+	d := &Daemon{}
+	result, handled, err := d.performStructuredRemoteOperation(context.Background(), "settings.interface", map[string]any{
+		"theme": "Paper", "seek_step": 12, "simplified": true, "panels": map[string]bool{"metadata": true},
+	}, nil)
+	if err != nil || !handled {
+		t.Fatalf("remote interface update: handled=%t result=%#v err=%v", handled, result, err)
+	}
+	settings, err := loadInterfaceSettings()
+	if err != nil || settings.Theme != "Paper" || settings.SeekStep != 12 || !settings.Simplified || !settings.Panels["metadata"] {
+		t.Fatalf("persisted interface settings = %+v, err = %v", settings, err)
+	}
+}

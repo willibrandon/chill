@@ -109,7 +109,7 @@ func (t *tui) equalizerResult(msg equalizerResultMsg) tea.Cmd {
 }
 
 func (t *tui) equalizerKey(msg tea.KeyPressMsg) tea.Cmd {
-	keyName := msg.String()
+	keyName := t.presentation.mapKey("equalizer", msg.String())
 	switch keyName {
 	case "ctrl+q":
 		return tea.Quit
@@ -252,13 +252,24 @@ func (t *tui) equalizerView() tea.View {
 		view.SetContent(heading)
 		return view
 	}
-	status := t.statusBar()
-	if t.height == 2 {
-		view.SetContent(strings.Join([]string{heading, status}, "\n"))
-		return view
+	footer := ""
+	if t.presentation.ShowHelp && interfaceLayoutTier(t.width, t.height, true, t.presentation.Simplified) != "minimal" {
+		hints := []string{t.presentation.bindingHint("equalizer.right", "band"), t.presentation.bindingHint("equalizer.raise", "gain"), t.presentation.bindingHint("equalizer.next-preset", "preset"), t.presentation.bindingHint("equalizer.zero", "zero"), t.presentation.bindingHint("equalizer.flat", "flat"), t.presentation.bindingHint("equalizer.custom", "custom"), t.presentation.bindingHint("equalizer.pause", "pause"), t.presentation.bindingHint("equalizer.close", "prompt")}
+		footer = styleDim.Render(ansi.Truncate(strings.Join(hints, " · "), t.width, ""))
 	}
-	footer := styleDim.Render(ansi.Truncate("←/→ band · ↑/↓ gain · e/E preset · 0 zero · r flat · c custom · Space pause · Esc prompt", t.width, ""))
-	bodyHeight := t.height - 3
+	footerRows := 0
+	if footer != "" {
+		footerRows++
+	}
+	status := t.statusBar()
+	if status != "" {
+		footerRows++
+	}
+	if footerRows >= t.height {
+		footer = ""
+		footerRows--
+	}
+	bodyHeight := max(0, t.height-1-footerRows)
 	var body []string
 	if t.width >= 50 && bodyHeight >= 7 {
 		body = t.equalizerFaders(bodyHeight)
@@ -266,7 +277,12 @@ func (t *tui) equalizerView() tea.View {
 		body = t.equalizerList(bodyHeight)
 	}
 	content := append([]string{heading}, body...)
-	content = append(content, footer, status)
+	if footer != "" {
+		content = append(content, footer)
+	}
+	if status != "" {
+		content = append(content, status)
+	}
 	view.SetContent(strings.Join(content, "\n"))
 	return view
 }

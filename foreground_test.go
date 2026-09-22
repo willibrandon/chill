@@ -56,3 +56,40 @@ func TestForegroundLayoutIsBounded(t *testing.T) {
 		t.Fatalf("foreground controls are not discoverable: %q", plain)
 	}
 }
+
+// TestForegroundStatusContentUsesInterfaceProfile checks shared status settings.
+func TestForegroundStatusContentUsesInterfaceProfile(t *testing.T) {
+	settings := defaultInterfaceSettings()
+	settings.StatusFields = []string{"volume"}
+	if err := normalizeInterfaceSettings(&settings); err != nil {
+		t.Fatal(err)
+	}
+	m := &foregroundModel{
+		station: &Station{Name: "test", Desc: "Test audio"}, player: &pcmPlayer{output: &mpvPlayer{}},
+		settings: defaultPlaybackSettings(), eq: equalizerConfig{Preset: "Flat"}, state: "playing",
+		presentation: settings, width: 80, height: 12, muted: true,
+	}
+	plain := ansi.Strip(m.View().Content)
+	if !strings.Contains(plain, "vol 70 · muted") || strings.Contains(plain, "playing · 0:00") {
+		t.Fatalf("foreground status fields were ignored: %q", plain)
+	}
+	m.presentation.ShowStatus = false
+	if plain = ansi.Strip(m.View().Content); strings.Contains(plain, "vol 70") {
+		t.Fatalf("foreground status remained visible: %q", plain)
+	}
+}
+
+// TestForegroundQueuePreservesPlaybackModes checks finite-media status parity.
+func TestForegroundQueuePreservesPlaybackModes(t *testing.T) {
+	m := &foregroundMediaModel{
+		items: []MediaItem{{Kind: MediaTrack, ID: "track", Title: "Track"}}, player: &pcmPlayer{output: &mpvPlayer{}},
+		settings: defaultPlaybackSettings(), eq: equalizerConfig{Preset: "Flat"}, state: "playing", rate: 1,
+		presentation: defaultInterfaceSettings(), width: 120, height: 20, muted: true, shuffle: true, repeat: "all",
+	}
+	plain := ansi.Strip(m.View().Content)
+	for _, indicator := range []string{"shuffle", "repeat all", "muted"} {
+		if !strings.Contains(plain, indicator) {
+			t.Fatalf("foreground queue omitted %q: %q", indicator, plain)
+		}
+	}
+}

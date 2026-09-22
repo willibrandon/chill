@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/atotto/clipboard v0.1.4
+	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/mod v0.41.0
@@ -17,7 +18,6 @@ require (
 )
 
 require (
-	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect

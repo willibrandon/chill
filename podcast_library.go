@@ -34,7 +34,7 @@ type downloadPreferences struct {
 
 type episodeDownload struct {
 	Episode  podcast.Episode `json:"episode"`            // Episode retains stable feed identity.
-	State    string          `json:"state"`              // State tracks queued, active, ready, retry, error, or eviction.
+	State    string          `json:"state"`              // State is queued, downloading, retrying, ready, error, or evicted.
 	Path     string          `json:"path,omitempty"`     // Path is the completed local media file.
 	Bytes    int64           `json:"bytes,omitempty"`    // Bytes is the amount downloaded.
 	Total    int64           `json:"total,omitempty"`    // Total is the expected size when known.
