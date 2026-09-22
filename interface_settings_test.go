@@ -24,6 +24,72 @@ func TestBuiltInInterfaceThemesMeetContrastRules(t *testing.T) {
 	}
 }
 
+// TestBuiltInThemesOwnScreenHighlights guards against replacing the palette
+// with fixed or screen-global colors. Every interactive surface must render
+// the active theme's selection pair, and theme-specific content uses its
+// semantic palette roles.
+func TestBuiltInThemesOwnScreenHighlights(t *testing.T) {
+	withConfigDir(t)
+	t.Cleanup(func() { _, _, _ = activateInterfaceSettings(defaultInterfaceSettings()) })
+	selectionPrefixes := map[string]string{}
+	for _, theme := range builtinInterfaceThemes {
+		t.Run(theme.Name, func(t *testing.T) {
+			settings := defaultInterfaceSettings()
+			settings.Theme = theme.Name
+			settings.ColorMode = "truecolor"
+			if _, _, err := activateInterfaceSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			selection, _, found := strings.Cut(styleSelection.Render("selected"), "selected")
+			if !found || selection == "" {
+				t.Fatal("theme selection style did not emit a color sequence")
+			}
+			if previous, exists := selectionPrefixes[selection]; exists {
+				t.Fatalf("selection palette duplicates %s", previous)
+			}
+			selectionPrefixes[selection] = theme.Name
+
+			model := newTUI()
+			model.width, model.height, model.presentation = 100, 24, settings
+			model.appearance.settings = settings
+			model.appearance.themes = builtinInterfaceThemes
+			model.libraryUI.page, model.libraryUI.title = "home", "Library"
+			model.podcasts.page = podcastPage{kind: "home", title: "Podcasts"}
+			model.radio.page = radioPage{kind: "home", title: "Radio"}
+			model.providersUI.page, model.providersUI.title = "home", "Providers"
+			model.providersUI.infos = []providerInfo{{Key: "youtube", Name: "YouTube"}}
+			model.eq.config = defaultEqualizerConfig()
+			model.suggestions = []suggestion{{text: "play", desc: "play a station"}}
+
+			screens := map[string]string{
+				"appearance": model.appearanceView().Content,
+				"keys":       model.keyOverlayView().Content,
+				"podcasts":   model.podcastView().Content,
+				"equalizer":  strings.Join(model.equalizerList(5), "\n"),
+				"radio":      model.radioView().Content,
+				"library":    model.libraryView().Content,
+				"providers":  model.providerView().Content,
+				"audio":      model.audioView().Content,
+				"palette":    model.palette(),
+			}
+			for name, content := range screens {
+				if !strings.Contains(content, selection) {
+					t.Errorf("%s did not use %s's selection palette", name, theme.Name)
+				}
+			}
+
+			secondary, _, found := strings.Cut(styleCommand.Render("lyrics"), "lyrics")
+			if !found || secondary == "" {
+				t.Fatal("theme secondary style did not emit a color sequence")
+			}
+			model.lyrics.lines = []string{"theme-owned lyric color"}
+			if content := model.lyricsView().Content; !strings.Contains(content, secondary) {
+				t.Errorf("lyrics did not use %s's secondary palette", theme.Name)
+			}
+		})
+	}
+}
+
 // TestInterfaceSettingsPersistAndPreserveDefaults checks atomic durable settings.
 func TestInterfaceSettingsPersistAndPreserveDefaults(t *testing.T) {
 	withConfigDir(t)
@@ -283,6 +349,32 @@ func TestAppearancePreviewCancelAndKeyOverlay(t *testing.T) {
 	model.toggleKeyOverlay()
 	if !model.keyOverlay.open || !strings.Contains(ansi.Strip(model.keyOverlayView().Content), "global.library") {
 		t.Fatal("searchable key overlay was not generated from the registry")
+	}
+}
+
+// TestKeyOverlayPreservesStructuredFields checks long bindings and action IDs
+// are rendered from their source fields rather than parsed from padded text.
+func TestKeyOverlayPreservesStructuredFields(t *testing.T) {
+	model := newTUI()
+	model.width, model.height = 160, 12
+	model.audioUI.open = true
+	model.toggleKeyOverlay()
+	model.keyOverlay.query.SetValue("audio.adjust-right")
+	plain := ansi.Strip(model.keyOverlayView().Content)
+	for _, value := range []string{"right, enter, space", "audio.adjust-right", "Select the next value"} {
+		if !strings.Contains(plain, value) {
+			t.Errorf("audio binding omitted %q: %q", value, plain)
+		}
+	}
+	if strings.Contains(plain, "right, enter, sp…") {
+		t.Fatalf("audio binding was truncated before layout: %q", plain)
+	}
+
+	model.audioUI.open = false
+	model.keyOverlay.query.SetValue("prompt.suggestion-previous")
+	plain = ansi.Strip(model.keyOverlayView().Content)
+	if !strings.Contains(plain, "prompt.suggestion-previous") {
+		t.Fatalf("long action ID was truncated before layout: %q", plain)
 	}
 }
 

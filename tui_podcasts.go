@@ -722,11 +722,25 @@ func (t *tui) podcastView() tea.View {
 		if p.page.kind == "episodes" && t.status != nil && t.status.Episode != nil && t.status.Episode.Key() == p.page.feed.Episodes[rows[index]].Key() && (t.status.Playing || t.status.Paused) {
 			text = "▶ " + strings.TrimPrefix(text, "  ")
 		}
-		style, prefix := styleInput, "   "
 		if index == p.page.selected {
-			style, prefix = styleSelected, " ❯ "
+			lines[row+2] = styleSelection.Render(fit(" ❯ " + text))
+			continue
 		}
-		lines[row+2] = style.Render(fit(prefix + text))
+		prefix := styleDim.Render("   ")
+		markerStyle := styleDim
+		marker := ""
+		if strings.HasPrefix(text, "▶ ") {
+			marker, markerStyle, text = "▶ ", stylePrompt, strings.TrimPrefix(text, "▶ ")
+		} else if strings.HasPrefix(text, "✓ ") {
+			marker, markerStyle, text = "✓ ", styleSuccess, strings.TrimPrefix(text, "✓ ")
+		} else if strings.HasPrefix(text, "♥ ") {
+			marker, markerStyle, text = "♥ ", styleStation, strings.TrimPrefix(text, "♥ ")
+		}
+		contentStyle := styleInput
+		if p.page.kind == "home" || p.page.kind == "categories" {
+			contentStyle = styleCommand
+		}
+		lines[row+2] = fit(prefix + markerStyle.Render(marker) + contentStyle.Render(text))
 	}
 	if room > 0 && len(rows) == 0 && !p.loading {
 		lines[2] = styleDim.Render(fit("  No results. " + t.presentation.bindingLabel("podcast.global-search") + " searches shows or opens an RSS URL."))

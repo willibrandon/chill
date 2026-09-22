@@ -583,11 +583,21 @@ func (t *tui) providerView() tea.View {
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
 		text := browser.rowText(rows[index])
-		style, prefix := styleInput, "   "
 		if index == browser.selected {
-			style, prefix = styleSelected, " ❯ "
+			lines[row+2] = styleSelection.Render(fit(" ❯ " + text))
+			continue
 		}
-		lines[row+2] = style.Render(fit(prefix + text))
+		if browser.page == "home" && rows[index] == 0 {
+			lines[row+2] = fit(styleDim.Render("   ") + styleCommand.Render(text))
+			continue
+		}
+		labelWidth := 13
+		if browser.page == "home" {
+			labelWidth = 18
+		}
+		label := ansi.Truncate(text, labelWidth, "")
+		detail := strings.TrimLeft(strings.TrimPrefix(text, label), " ")
+		lines[row+2] = fit(styleDim.Render("   ") + styleCommand.Render(label) + styleInput.Render(detail))
 	}
 	if room > 0 && len(rows) == 0 && !browser.loading {
 		lines[2] = styleDim.Render("  No results. " + t.presentation.bindingLabel("provider.global-search") + " searches every provider.")

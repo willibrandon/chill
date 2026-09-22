@@ -143,7 +143,7 @@ func (t *tui) lyricsView() tea.View {
 	layout := t.contentLayout(height, false, 1)
 	room := layout.room
 	for i := 0; i < room && l.offset+i < len(l.lines); i++ {
-		rows[i+2] = fit(styleInput.Render("  " + l.lines[l.offset+i]))
+		rows[i+2] = fit(styleCommand.Render("  " + l.lines[l.offset+i]))
 	}
 	if layout.note >= 0 {
 		note := l.note

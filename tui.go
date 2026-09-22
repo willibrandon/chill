@@ -37,6 +37,7 @@ var (
 	styleInput    = lipgloss.NewStyle().Foreground(lipgloss.Color("#DCDFE4"))
 	styleCommand  = lipgloss.NewStyle().Foreground(lipgloss.Color("#56B6C2"))
 	styleStation  = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5C07B"))
+	styleSuccess  = lipgloss.NewStyle()
 	styleSelected = lipgloss.NewStyle().Foreground(lipgloss.Color("#98FFEE"))
 	styleError    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E06C75"))
 	styleHeading  = lipgloss.NewStyle().Foreground(lipgloss.Color("#E5C07B"))
@@ -1179,7 +1180,7 @@ func (t *tui) palette() string {
 			style = styleStation
 		}
 		if i == t.selected {
-			marker, style = " ❯ ", styleSelected
+			marker, style = " ❯ ", styleSelection
 		}
 
 		text := ansi.Truncate(marker+column(s.text, nameWidth)+s.desc, inner, "…")

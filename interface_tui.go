@@ -415,13 +415,13 @@ func (t *tui) appearanceView() tea.View {
 	for line := 0; line < room && first+line < len(rows); line++ {
 		index := first + line
 		row := rows[index]
-		prefix, style := "  ", styleInput
-		if index == t.appearance.selected {
-			prefix, style = "❯ ", styleSelected
-		}
 		labelWidth := min(30, max(16, t.width/3))
-		content := prefix + column(row.label, labelWidth) + row.value
-		lines[line+2] = style.Render(ansi.Truncate(content, t.width, "…"))
+		content := "❯ " + column(row.label, labelWidth) + row.value
+		if index == t.appearance.selected {
+			lines[line+2] = styleSelection.Render(ansi.Truncate(content, t.width, "…"))
+			continue
+		}
+		lines[line+2] = styleDim.Render("  ") + styleCommand.Render(column(row.label, labelWidth)) + styleInput.Render(ansi.Truncate(row.value, max(0, t.width-labelWidth-2), "…"))
 	}
 	if t.height >= 4 {
 		lines[t.height-3] = styleDim.Render(ansi.Truncate(t.appearance.note, t.width, "…"))
@@ -521,7 +521,7 @@ func (t *tui) keyOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		overlay.selected = 0
 		return cmd
 	}
-	rows := interfaceKeyRows(t.presentation, t.activeKeyScope(), overlay.query.Value())
+	entries := interfaceKeyEntries(t.presentation, t.activeKeyScope(), overlay.query.Value())
 	switch t.presentation.mapKey("overlay", msg.String()) {
 	case "esc":
 		overlay.open = false
@@ -531,11 +531,11 @@ func (t *tui) keyOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "up":
 		overlay.selected = max(0, overlay.selected-1)
 	case "down":
-		overlay.selected = min(max(0, len(rows)-1), overlay.selected+1)
+		overlay.selected = min(max(0, len(entries)-1), overlay.selected+1)
 	case "pgup":
 		overlay.selected = max(0, overlay.selected-max(1, t.height-7))
 	case "pgdown":
-		overlay.selected = min(max(0, len(rows)-1), overlay.selected+max(1, t.height-7))
+		overlay.selected = min(max(0, len(entries)-1), overlay.selected+max(1, t.height-7))
 	}
 	return nil
 }
@@ -543,7 +543,7 @@ func (t *tui) keyOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
 func (t *tui) keyOverlayView() tea.View {
 	view := tea.NewView("")
 	view.AltScreen = true
-	rows := interfaceKeyRows(t.presentation, t.activeKeyScope(), t.keyOverlay.query.Value())
+	entries := interfaceKeyEntries(t.presentation, t.activeKeyScope(), t.keyOverlay.query.Value())
 	lines := make([]string, t.height)
 	heading := "keybindings · " + t.activeKeyScope()
 	if query := t.keyOverlay.query.Value(); query != "" {
@@ -551,16 +551,25 @@ func (t *tui) keyOverlayView() tea.View {
 	}
 	lines[0] = styleHeading.Render(ansi.Truncate(heading, t.width, "…"))
 	room := max(0, t.height-4)
-	first := max(0, min(t.keyOverlay.selected-room/2, len(rows)-room))
-	for line := 0; line < room && first+line < len(rows); line++ {
-		index := first + line
-		style, prefix := styleInput, "  "
-		if index == t.keyOverlay.selected {
-			style, prefix = styleSelected, "❯ "
-		}
-		lines[line+2] = style.Render(ansi.Truncate(prefix+rows[index], t.width, "…"))
+	first := max(0, min(t.keyOverlay.selected-room/2, len(entries)-room))
+	keysWidth, actionWidth := 0, 0
+	for _, entry := range entries {
+		keysWidth = max(keysWidth, lipgloss.Width(strings.Join(entry.keys, ", ")))
+		actionWidth = max(actionWidth, lipgloss.Width(entry.id))
 	}
-	if len(rows) == 0 && room > 0 {
+	for line := 0; line < room && first+line < len(entries); line++ {
+		index := first + line
+		entry := entries[index]
+		keys := column(strings.Join(entry.keys, ", "), keysWidth+2)
+		action := column(entry.id, actionWidth+2)
+		content := keys + action + entry.description
+		if index == t.keyOverlay.selected {
+			lines[line+2] = styleSelection.Render(ansi.Truncate("❯ "+content, t.width, "…"))
+			continue
+		}
+		lines[line+2] = ansi.Truncate(styleDim.Render("  ")+stylePrompt.Render(keys)+styleCommand.Render(action)+styleInput.Render(entry.description), t.width, "…")
+	}
+	if len(entries) == 0 && room > 0 {
 		lines[2] = styleDim.Render("  no matching bindings")
 	}
 	if t.height >= 2 {

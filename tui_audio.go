@@ -253,11 +253,19 @@ func (t *tui) audioView() tea.View {
 		if entry.active {
 			mark = "● "
 		}
-		style, prefix := styleInput, "   "
 		if index == browser.selected {
-			style, prefix = styleSelected, " ❯ "
+			lines[row+2] = styleSelection.Render(fit(" ❯ " + mark + entry.label))
+			continue
 		}
-		lines[row+2] = style.Render(fit(prefix + mark + entry.label))
+		markerStyle := styleDim
+		if entry.active {
+			markerStyle = styleSuccess
+		}
+		label, value, found := strings.Cut(entry.label, "  ")
+		if !found {
+			label, value = entry.label, ""
+		}
+		lines[row+2] = fit(styleDim.Render("   ") + markerStyle.Render(mark) + styleCommand.Render(label) + styleInput.Render("  "+strings.TrimLeft(value, " ")))
 	}
 	if layout.note >= 0 {
 		note := browser.note
