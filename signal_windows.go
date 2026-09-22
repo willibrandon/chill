@@ -89,8 +89,13 @@ func startInTree(cmd *exec.Cmd) (*processTree, error) {
 		return nil, err
 	}
 
-	// Start suspended so the process can't spawn children before it joins the job.
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	// A detached daemon has no console for helpers to inherit. Give helpers a
+	// windowless console, also inherited by package-manager shims' children.
+	// Start suspended so no child can escape before its parent joins the job.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW,
+		HideWindow:    true,
+	}
 	if err := cmd.Start(); err != nil {
 		windows.CloseHandle(job)
 		return nil, err
