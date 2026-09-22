@@ -722,7 +722,11 @@ func (t *tui) podcastView() tea.View {
 		if p.page.kind == "episodes" && t.status != nil && t.status.Episode != nil && t.status.Episode.Key() == p.page.feed.Episodes[rows[index]].Key() && (t.status.Playing || t.status.Paused) {
 			text = "▶ " + strings.TrimPrefix(text, "  ")
 		}
-		lines[row+2] = renderBrowserRow(text, width, index == p.page.selected)
+		style, prefix := styleInput, "   "
+		if index == p.page.selected {
+			style, prefix = styleSelected, " ❯ "
+		}
+		lines[row+2] = style.Render(fit(prefix + text))
 	}
 	if room > 0 && len(rows) == 0 && !p.loading {
 		lines[2] = styleDim.Render(fit("  No results. " + t.presentation.bindingLabel("podcast.global-search") + " searches shows or opens an RSS URL."))

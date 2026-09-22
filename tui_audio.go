@@ -253,7 +253,11 @@ func (t *tui) audioView() tea.View {
 		if entry.active {
 			mark = "● "
 		}
-		lines[row+2] = renderBrowserRow(mark+entry.label, width, index == browser.selected)
+		style, prefix := styleInput, "   "
+		if index == browser.selected {
+			style, prefix = styleSelected, " ❯ "
+		}
+		lines[row+2] = style.Render(fit(prefix + mark + entry.label))
 	}
 	if layout.note >= 0 {
 		note := browser.note

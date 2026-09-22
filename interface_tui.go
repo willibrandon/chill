@@ -38,35 +38,6 @@ type appearanceRow struct {
 	id, label, value string
 }
 
-// renderBrowserRow gives every selectable screen the same contrast-tested
-// active row and separates row labels from their details with semantic colors.
-func renderBrowserRow(text string, width int, selected bool) string {
-	prefix := "   "
-	if selected {
-		prefix = " ❯ "
-		return styleSelection.Render(ansi.Truncate(prefix+text, width, "…"))
-	}
-	contentWidth := max(0, width-lipgloss.Width(prefix))
-	return styleDim.Render(prefix) + renderBrowserRowContent(ansi.Truncate(text, contentWidth, "…"))
-}
-
-func renderBrowserRowContent(text string) string {
-	leading := text[:len(text)-len(strings.TrimLeft(text, " "))]
-	text = strings.TrimLeft(text, " ")
-	result := styleDim.Render(leading)
-	for _, marker := range []string{"♥ ", "★ ", "✓ ", "● ", "▶ "} {
-		if strings.HasPrefix(text, marker) {
-			result += styleStation.Render(marker)
-			text = strings.TrimPrefix(text, marker)
-			break
-		}
-	}
-	if label, detail, found := strings.Cut(text, "  "); found {
-		return result + styleCommand.Render(label) + styleInput.Render("  "+detail)
-	}
-	return result + styleCommand.Render(text)
-}
-
 type interfacePanelMsg struct {
 	library *podcastLibrary
 }
@@ -444,9 +415,13 @@ func (t *tui) appearanceView() tea.View {
 	for line := 0; line < room && first+line < len(rows); line++ {
 		index := first + line
 		row := rows[index]
+		prefix, style := "  ", styleInput
+		if index == t.appearance.selected {
+			prefix, style = "❯ ", styleSelected
+		}
 		labelWidth := min(30, max(16, t.width/3))
-		content := column(row.label, labelWidth) + row.value
-		lines[line+2] = renderBrowserRow(content, t.width, index == t.appearance.selected)
+		content := prefix + column(row.label, labelWidth) + row.value
+		lines[line+2] = style.Render(ansi.Truncate(content, t.width, "…"))
 	}
 	if t.height >= 4 {
 		lines[t.height-3] = styleDim.Render(ansi.Truncate(t.appearance.note, t.width, "…"))
@@ -579,7 +554,11 @@ func (t *tui) keyOverlayView() tea.View {
 	first := max(0, min(t.keyOverlay.selected-room/2, len(rows)-room))
 	for line := 0; line < room && first+line < len(rows); line++ {
 		index := first + line
-		lines[line+2] = renderBrowserRow(rows[index], t.width, index == t.keyOverlay.selected)
+		style, prefix := styleInput, "  "
+		if index == t.keyOverlay.selected {
+			style, prefix = styleSelected, "❯ "
+		}
+		lines[line+2] = style.Render(ansi.Truncate(prefix+rows[index], t.width, "…"))
 	}
 	if len(rows) == 0 && room > 0 {
 		lines[2] = styleDim.Render("  no matching bindings")

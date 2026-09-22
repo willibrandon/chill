@@ -15,18 +15,19 @@ Set WindowBar Colorful
 Set TypingSpeed 0ms
 Set Framerate 30
 Set WaitTimeout 60s
+Env NO_COLOR ""
 Env CLICOLOR_FORCE "1"
 Env COLORTERM "truecolor"
 
 Hide
-Type "go run ./vhs/fixtures repl-overview"
+Type "go run . -i"
 Enter
 Wait+Screen /chill>/
 Show
 
 Type "play chillhop"
 Enter
-Wait+Screen /playing.*chillhop/
+Wait+Screen /playing │ chillhop/
 Type "list"
 Enter
 Wait+Screen /study/
@@ -50,4 +51,9 @@ Wait+Screen /Enter accepts/
 Sleep 2s
 Screenshot assets/chill.png
 Sleep 1s
+
+Ctrl+c
+Type "stop"
+Enter
+Wait+Screen /stay chill/
 Ctrl+q

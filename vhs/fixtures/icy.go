@@ -1,10 +1,9 @@
-// Command fixtures supplies deterministic media and isolated Chill sessions for VHS.
+// Command icy serves a quiet PCM stream with deterministic metadata for VHS.
 package main
 
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,14 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
 
 const (
 	address     = "127.0.0.1:18765"
-	mediaPath   = "vhs/fixtures/showcase.m4a"
 	sampleRate  = 48_000
 	channels    = 2
 	sampleWidth = 2
@@ -208,144 +205,17 @@ func stop() error {
 	return nil
 }
 
-func isolatedEnvironment(root string) ([]string, string) {
-	home := filepath.Join(root, "home")
-	config := filepath.Join(root, "config")
-	runtimeDirectory := filepath.Join(root, "runtime")
-	cache := filepath.Join(root, "cache")
-	overrides := []string{
-		"HOME=" + home,
-		"USERPROFILE=" + home,
-		"XDG_CONFIG_HOME=" + config,
-		"APPDATA=" + config,
-		"LOCALAPPDATA=" + cache,
-		"TMPDIR=" + runtimeDirectory,
-		"TMP=" + runtimeDirectory,
-		"TEMP=" + runtimeDirectory,
-		"CLICOLOR_FORCE=1",
-		"COLORTERM=truecolor",
-	}
-	replaced := map[string]bool{"HOME": true, "USERPROFILE": true, "XDG_CONFIG_HOME": true, "APPDATA": true, "LOCALAPPDATA": true, "TMPDIR": true, "TMP": true, "TEMP": true, "NO_COLOR": true, "CLICOLOR_FORCE": true, "COLORTERM": true}
-	environment := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range os.Environ() {
-		name, _, found := strings.Cut(entry, "=")
-		if found && !replaced[strings.ToUpper(name)] {
-			environment = append(environment, entry)
-		}
-	}
-	return append(environment, overrides...), home
-}
-
-func writeOverviewInterface(root, home string) error {
-	config := filepath.Join(root, "config")
-	if runtime.GOOS == "darwin" {
-		config = filepath.Join(home, "Library", "Application Support")
-	}
-	path := filepath.Join(config, "chill", "interface.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	data := []byte("{\n  \"visualizer_height\": 10,\n  \"panels\": {\n    \"source\": false,\n    \"queue\": false,\n    \"equalizer\": false,\n    \"audio\": false,\n    \"downloads\": false,\n    \"network\": false,\n    \"metadata\": false\n  }\n}\n")
-	return os.WriteFile(path, data, 0600)
-}
-
-func buildChill(root string) (string, error) {
-	name := "chill-vhs"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	path := filepath.Join(root, name)
-	command := exec.Command("go", "build", "-o", path, ".")
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Run(); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func stopChill(path string, environment []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, path, "--stop")
-	command.Env = environment
-	command.Stdout = io.Discard
-	command.Stderr = io.Discard
-	_ = command.Run()
-}
-
-func repl(overview, withMedia bool) error {
-	if withMedia {
-		defer clean()
-		if err := media(); err != nil {
-			return err
-		}
-	}
-	root, err := os.MkdirTemp("", "chill-vhs-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(root)
-	environment, home := isolatedEnvironment(root)
-	for _, directory := range []string{home, filepath.Join(root, "config"), filepath.Join(root, "cache"), filepath.Join(root, "runtime")} {
-		if err := os.MkdirAll(directory, 0700); err != nil {
-			return err
-		}
-	}
-	if overview {
-		if err := writeOverviewInterface(root, home); err != nil {
-			return err
-		}
-	}
-	binary, err := buildChill(root)
-	if err != nil {
-		return err
-	}
-	defer stopChill(binary, environment)
-	command := exec.Command(binary, "--theme", "Midnight", "-i")
-	command.Env = environment
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	return command.Run()
-}
-
-func media() error {
-	command := exec.Command(
-		"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000",
-		"-t", "120", "-c:a", "aac", "-b:a", "96k",
-		"-metadata", "artist=Traditional", "-metadata", "title=Auld Lang Syne", "-metadata", "album=Chill Showcase",
-		"-metadata", "lyrics=Should auld acquaintance be forgot\nAnd never brought to mind?\nShould auld acquaintance be forgot\nAnd days of auld lang syne?",
-		"-y", mediaPath,
-	)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	return command.Run()
-}
-
-func clean() {
-	if err := os.Remove(mediaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(os.Stderr, "remove media:", err)
-	}
-}
-
 func run() error {
 	if len(os.Args) != 2 {
-		return fmt.Errorf("usage: go run ./vhs/fixtures <repl|repl-media|repl-overview|start|serve|stop>")
+		return fmt.Errorf("usage: go run ./vhs/fixtures <start|serve|stop>")
 	}
 	switch os.Args[1] {
-	case "repl":
-		return repl(false, false)
-	case "repl-media":
-		return repl(false, true)
-	case "repl-overview":
-		return repl(true, false)
 	case "start":
 		return start()
 	case "serve":
 		server := newServer()
 		err := server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil && err != http.ErrServerClosed {
 			return err
 		}
 		return nil
