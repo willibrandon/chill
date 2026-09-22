@@ -44,6 +44,7 @@ jobs:
             if [ "$arch" = amd64 ]; then clang_arch=x86_64; fi
             CC="clang -arch $clang_arch" GOOS=darwin GOARCH=$arch CGO_ENABLED=1 \
               go build -trimpath -ldflags "-s -w" -o "$out/$name/chill" .
+            otool -L "$out/$name/chill"
             cp README.md "$out/$name/"
             tar -C "$out" -czf "$out/$name.tar.gz" "$name"
           done
@@ -55,8 +56,149 @@ jobs:
           path: ${{ runner.temp }}/out/*.tar.gz
           if-no-files-found: error
 
+  build-linux:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: debian:bullseye@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - name: Install build tools
+        run: |
+          # Freeze the compiler and glibc SDK independently of moving mirrors.
+          cat > /etc/apt/sources.list <<'EOF'
+          deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main
+          deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main
+          EOF
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git gcc libc6-dev
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build against glibc 2.31
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/out"
+          name=chill_${TAG#v}_linux_${{ matrix.arch }}
+          mkdir -p "$out/$name"
+          go build -trimpath -ldflags "-s -w" -o "$out/$name/chill" .
+          "$out/$name/chill" --version
+          ldd "$out/$name/chill"
+          cp README.md "$out/$name/"
+          tar -C "$out" -czf "$out/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-assets
+          path: ${{ runner.temp }}/out/*.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: ubuntu-22.04
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install pinned LLVM-MinGW UCRT toolchain
+        run: |
+          archive=llvm-mingw-20260908-ucrt-ubuntu-22.04-x86_64.tar.xz
+          curl -fL --retry 3 "https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/$archive" -o "$RUNNER_TEMP/$archive"
+          echo "2258c745e3155870c80793f3e8c80b28fbde11b9ff73c4c78783635b3440b092  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/$archive"
+          echo "$RUNNER_TEMP/llvm-mingw-20260908-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Build Windows AMD64 and ARM64
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          for arch in amd64 arm64; do
+            target=x86_64
+            if [ "$arch" = arm64 ]; then target=aarch64; fi
+            name=chill_${TAG#v}_windows_${arch}
+            CC="$target-w64-mingw32-clang" GOOS=windows GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w" -o "$out/$name/chill.exe" .
+            llvm-objdump -p "$out/$name/chill.exe" | grep 'DLL Name'
+            if llvm-objdump -p "$out/$name/chill.exe" | grep -Ei 'DLL Name:.*(libgcc|libstdc|libwinpthread|libc\+\+)'; then
+              echo 'Unexpected compiler runtime DLL dependency'
+              exit 1
+            fi
+            cp README.md "$out/$name/"
+            (cd "$out" && zip -qr "$name.zip" "$name")
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: ${{ runner.temp }}/out/*.zip
+          if-no-files-found: error
+
+  verify-artifacts:
+    needs: [build-macos, build-linux, build-windows]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: darwin_amd64
+            artifact: macos-assets
+          - runner: macos-15
+            target: darwin_arm64
+            artifact: macos-assets
+          - runner: ubuntu-24.04
+            target: linux_amd64
+            artifact: linux-amd64-assets
+          - runner: ubuntu-24.04-arm
+            target: linux_arm64
+            artifact: linux-arm64-assets
+          - runner: windows-2025
+            target: windows_amd64
+            artifact: windows-assets
+          - runner: windows-11-arm
+            target: windows_arm64
+            artifact: windows-assets
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/assets
+      - name: Run Unix release binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name=chill_${TAG#v}_${{ matrix.target }}
+          tar -C "$RUNNER_TEMP/assets" -xzf "$RUNNER_TEMP/assets/$name.tar.gz"
+          "$RUNNER_TEMP/assets/$name/chill" --version
+          "$RUNNER_TEMP/assets/$name/chill" --help
+          "$RUNNER_TEMP/assets/$name/chill" doctor
+      - name: Run Windows release binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "chill_$($env:TAG.TrimStart('v'))_${{ matrix.target }}"
+          Expand-Archive "$env:RUNNER_TEMP/assets/$name.zip" "$env:RUNNER_TEMP/assets/extracted"
+          $binary = "$env:RUNNER_TEMP/assets/extracted/$name/chill.exe"
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary doctor
+          exit $LASTEXITCODE
+
   release:
-    needs: build-macos
+    needs: [verify-artifacts]
     runs-on: ubuntu-latest
     outputs:
       update_packages: ${{ steps.packages.outputs.enabled }}
@@ -68,37 +210,11 @@ jobs:
           # the go command reads the version from the tag
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        run: |
-          # build outside the checkout, stray files would mark the version as +dirty
-          out="$RUNNER_TEMP/out"
-          mkdir -p "$out/dist"
-          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            os=${target%/*}
-            arch=${target#*/}
-            name=chill_${TAG#v}_${os}_${arch}
-            ext=""
-            if [ "$os" = windows ]; then ext=".exe"; fi
-
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out/$name/chill$ext" .
-            cp README.md "$out/$name/"
-
-            if [ "$os" = windows ]; then
-              (cd "$out" && zip -qr "dist/$name.zip" "$name")
-            else
-              tar -C "$out" -czf "$out/dist/$name.tar.gz" "$name"
-            fi
-          done
-
-      - name: Download macOS assets
+      - name: Download platform assets
         uses: actions/download-artifact@v4
         with:
-          name: macos-assets
+          pattern: '*-assets'
+          merge-multiple: true
           path: ${{ runner.temp }}/out/dist
 
       - name: Create checksums

@@ -82,9 +82,9 @@ func (d *Daemon) probeEpisodeDuration(localPath string, cache *episode.Cache) {
 		if cache != nil {
 			probeContext = cache.Context()
 		}
-		out, _, err := diagnosticCommandContext(probeContext, "ffprobe", 10*time.Second, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path)
-		seconds, parseErr := strconv.ParseFloat(strings.TrimSpace(out), 64)
-		if err != nil || parseErr != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 365*24*3600 {
+		item, err := probeLocalMedia(probeContext, path)
+		seconds := item.Duration
+		if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 365*24*3600 {
 			return
 		}
 		d.mu.Lock()
@@ -262,7 +262,7 @@ func (d *Daemon) episodeSpeed(arg string) string {
 		return fail("speed must be between 0.5 and 3")
 	}
 	if d.current != nil && d.current.finite() && d.player != nil {
-		if err := d.player.command("set_property", "speed", v); err != nil {
+		if err := d.player.setSpeed(v); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -276,7 +276,7 @@ func (d *Daemon) episodeSpeed(arg string) string {
 		next.Speed = v
 		if err := l.commit(next); err != nil {
 			if d.current != nil && d.current.finite() && d.player != nil {
-				_ = d.player.command("set_property", "speed", previous)
+				_ = d.player.setSpeed(previous)
 			}
 			return fail(err.Error())
 		}

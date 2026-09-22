@@ -4,6 +4,7 @@ package main
 
 import (
 	"os/exec"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -12,7 +13,6 @@ import (
 
 var (
 	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
-	procSuspendThread    = kernel32.NewProc("SuspendThread")
 	procResumeThread     = kernel32.NewProc("ResumeThread")
 	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
 	procThread32First    = kernel32.NewProc("Thread32First")
@@ -43,7 +43,7 @@ type THREADENTRY32 struct {
 }
 
 // JOBOBJECT_BASIC_PROCESS_ID_LIST with room for far more processes than an
-// mpv tree will ever have.
+// decoder or extractor tree needs.
 type JOBOBJECT_BASIC_PROCESS_ID_LIST struct {
 	// NumberOfAssignedProcesses is the total number of processes in the job.
 	NumberOfAssignedProcesses uint32
@@ -54,15 +54,16 @@ type JOBOBJECT_BASIC_PROCESS_ID_LIST struct {
 }
 
 // processTree is a process and all of its descendants, tracked with a job
-// object. On Windows "mpv" usually resolves to a launcher (mpv.com, or a
-// scoop/chocolatey shim) that runs the real player as a child process, so
-// acting on the launcher alone leaves the music playing.
+// object. Package-manager shims and extractors can start child processes,
+// so canceling a launcher alone would leave owned workers running.
 type processTree struct {
-	job windows.Handle
+	job     windows.Handle
+	once    sync.Once
+	killErr error
 }
 
 // startInTree starts cmd inside a new job object so that everything it
-// spawns can be paused, resumed, and killed together.
+// spawns can be killed together.
 func startInTree(cmd *exec.Cmd) (*processTree, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
@@ -114,13 +115,6 @@ func (t *processTree) assign(pid uint32) error {
 	return windows.AssignProcessToJobObject(t.job, handle)
 }
 
-// pause suspends all threads of every process in the tree.
-func (t *processTree) pause() error {
-	return t.forEachThread(func(threadID uint32) error {
-		return suspendThread(threadID)
-	})
-}
-
 // resume resumes all threads of every process in the tree.
 func (t *processTree) resume() error {
 	return t.forEachThread(func(threadID uint32) error {
@@ -130,9 +124,11 @@ func (t *processTree) resume() error {
 
 // kill terminates every process in the tree and releases the job.
 func (t *processTree) kill() error {
-	err := windows.TerminateJobObject(t.job, 1)
-	windows.CloseHandle(t.job)
-	return err
+	t.once.Do(func() {
+		t.killErr = windows.TerminateJobObject(t.job, 1)
+		windows.CloseHandle(t.job)
+	})
+	return t.killErr
 }
 
 // pids returns the IDs of the processes currently in the job.
@@ -185,24 +181,6 @@ func (t *processTree) forEachThread(fn func(threadID uint32) error) error {
 		}
 	}
 
-	return nil
-}
-
-// suspendThread suspends a single thread by its ID.
-func suspendThread(threadID uint32) error {
-	handle, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, threadID)
-	if err == windows.ERROR_INVALID_PARAMETER {
-		return nil // thread exited after the snapshot was taken
-	}
-	if err != nil {
-		return err
-	}
-	defer windows.CloseHandle(handle)
-
-	ret, _, err := procSuspendThread.Call(uintptr(handle))
-	if ret == 0xFFFFFFFF {
-		return err
-	}
 	return nil
 }
 

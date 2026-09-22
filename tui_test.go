@@ -38,14 +38,14 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 		msg := task.next()
 		model.update(msg)
 		if result, ok := msg.(resultMsg); ok {
-			if result.err == nil || result.out != "" {
-				t.Fatalf("findings should stream separately from the final error: %+v", result)
+			if result.err != nil || result.out != "" {
+				t.Fatalf("findings should stream without a final error: %+v", result)
 			}
 			break
 		}
 	}
 	transcript := ansi.Strip(strings.Join(model.lines, "\n"))
-	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", "[FAIL] ffprobe", "[FAIL] audio devices", "[WARN] chill links", "no daemon running", "Doctor complete. Passed: 4, warnings: 2, failed: 5.", "doctor found problems"} {
+	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[WARN] ffprobe", "[WARN] chill links", "no daemon running", "failed: 0."} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q: %s", want, transcript)
 		}

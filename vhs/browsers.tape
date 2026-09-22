@@ -1,7 +1,6 @@
 # Capture the F7 library, F8 providers, F9 audio, and F10 interface screens.
 
 Require go
-Require mpv
 Require ffmpeg
 Require yt-dlp
 

@@ -67,7 +67,7 @@ func startForegroundPCM(station *Station, settings playbackSettings, muted, paus
 	}
 	p := raw.(*pcmPlayer)
 	p.setEqualizer(settings.equalizer().activeBands())
-	if err := p.command("loadfile", station.URL, "replace"); err != nil {
+	if err := p.load(station.URL); err != nil {
 		p.close()
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func (m *foregroundModel) mediaState() media.State {
 	if m.muted {
 		volume = 0
 	}
-	audio := m.settings.Audio.status(m.settings.Audio.Device)
+	audio := activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player)
 	return media.State{
 		Status: status, Volume: volume, Position: m.player.position(),
 		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
@@ -199,7 +199,7 @@ func (m *foregroundModel) setEQ(next equalizerConfig) {
 
 func (m *foregroundModel) setVolume(volume int) {
 	volume = max(0, min(100, volume))
-	if err := m.player.command("set_property", "volume", volume); err != nil {
+	if err := m.player.setVolume(volume); err != nil {
 		m.err = err.Error()
 		return
 	}
@@ -207,7 +207,7 @@ func (m *foregroundModel) setVolume(volume int) {
 	m.settings.Volume = volume
 	if err := m.saveSettings(); err != nil {
 		m.settings.Volume = previous
-		_ = m.player.command("set_property", "volume", previous)
+		_ = m.player.setVolume(previous)
 		m.err = "saving volume: " + err.Error()
 		return
 	}
@@ -316,7 +316,7 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case media.Play, media.Pause:
 			paused := msg.Kind == media.Pause
 			if paused != m.paused {
-				if err := m.player.command("set_property", "pause", paused); err != nil {
+				if err := m.player.setPaused(paused); err != nil {
 					m.err = err.Error()
 				} else {
 					m.paused = paused
@@ -387,7 +387,7 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "space":
 			m.paused = !m.paused
-			if err := m.player.command("set_property", "pause", m.paused); err != nil {
+			if err := m.player.setPaused(m.paused); err != nil {
 				m.paused = !m.paused
 				m.err = err.Error()
 			} else if m.paused {
@@ -396,7 +396,7 @@ func (m *foregroundModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = "playing"
 			}
 		case "m":
-			if err := m.player.command("set_property", "mute", !m.muted); err != nil {
+			if err := m.player.setMuted(!m.muted); err != nil {
 				m.err = err.Error()
 			} else {
 				m.muted = !m.muted
@@ -544,7 +544,7 @@ func (m *foregroundModel) View() tea.View {
 		status := orderedInterfaceStatus(presentation, map[string]string{
 			"state": m.state, "position": clock(m.player.position().Seconds()), "title": title,
 			"volume": fmt.Sprintf("vol %d", m.settings.Volume), "muted": mutedStatus, "equalizer": "eq " + m.eq.Preset,
-			"network": m.state, "audio": m.settings.Audio.status(m.settings.Audio.Device).Format,
+			"network": m.state, "audio": activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player).Format,
 		})
 		if status != "" {
 			lines = append(lines, "", foregroundLine(status, m.width, styleInput))
@@ -565,7 +565,7 @@ func (m *foregroundModel) View() tea.View {
 	}
 	lines = append(lines, foregroundPanelLines(presentation, m.width, m.height, map[string]string{
 		"source": "radio · " + m.station.Name, "queue": "live stream", "equalizer": m.eq.Preset,
-		"audio": m.settings.Audio.status(m.settings.Audio.Device).Format, "network": m.state, "metadata": metadata,
+		"audio": activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player).Format, "network": m.state, "metadata": metadata,
 	})...)
 	if presentation.ShowHelp {
 		hints := []string{presentation.bindingHint("playback.quit", "quit"), presentation.bindingHint("playback.pause", "pause"), presentation.bindingHint("playback.mute", "mute"), presentation.bindingHint("playback.lyrics", "lyrics"), presentation.bindingHint("playback.favorite", "favorite"), presentation.bindingHint("playback.bookmark", "bookmark"), presentation.bindingPairHint("playback.volume-down", "playback.volume-up", "volume"), presentation.bindingPairHint("playback.seek-back", "playback.seek-forward", "seek"), presentation.bindingPairHint("playback.previous", "playback.next", "previous/next")}

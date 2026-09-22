@@ -18,7 +18,7 @@ shows the station list, a tall live spectrum visualizer, and command suggestions
 together. The capture remains in the mixed REPL layout rather than opening the
 fullscreen visualizer.
 
-It drives the real REPL, so it needs mpv, FFmpeg and yt-dlp. It plays chillhop
+It drives the real REPL, so it needs FFmpeg and yt-dlp for website playback and recording. It plays chillhop
 and waits for live spectrum data. Its temporary interface profile hides the
 optional information panels and requests a taller visualizer for this overview.
 The pause before `status` gives playback a few seconds of uptime.

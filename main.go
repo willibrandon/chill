@@ -1,6 +1,6 @@
 // Package main implements chill, a terminal audio, radio, and podcast player.
 // It uses a client-server architecture
-// where a background daemon manages mpv playback and clients communicate
+// where a background daemon manages native audio playback and clients communicate
 // over a Unix socket.
 //
 // Usage:

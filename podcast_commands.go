@@ -104,9 +104,6 @@ func podcastMutation(action string, value any) (string, error) {
 }
 
 func clientEpisode(e podcast.Episode, restart, queue bool) (string, error) {
-	if err := checkPodcastRequirements(); err != nil {
-		return "", err
-	}
 	if queue {
 		return podcastMutation("podcast-queue", e)
 	}

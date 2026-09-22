@@ -122,14 +122,6 @@ func loadMediaInputs(ctx context.Context, inputs []string) ([]MediaItem, error) 
 }
 
 func probeSources(ctx context.Context, sources []string) ([]MediaItem, error) {
-	for _, source := range sources {
-		if !strings.HasPrefix(source, "http://") && !strings.HasPrefix(source, "https://") {
-			if err := checkLocalMediaRequirements(); err != nil {
-				return nil, err
-			}
-			break
-		}
-	}
 	items := make([]MediaItem, len(sources))
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
@@ -192,20 +184,24 @@ func tag(tags map[string]string, names ...string) string {
 	return ""
 }
 
-func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
+func probeLocalMediaExternal(ctx context.Context, path string) (MediaItem, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return MediaItem{}, err
 	}
 	item := MediaItem{Kind: MediaTrack, Source: filepath.Clean(absolute), Title: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), AddedAt: time.Now().UTC()}
 	item.ID = mediaID(item.Kind, item.Source)
-	out, _, err := diagnosticCommandContext(ctx, "ffprobe", 15*time.Second, "-v", "error", "-show_format", "-show_streams", "-of", "json", "--", item.Source)
+	probe, err := toolPath("ffprobe")
 	if err != nil {
-		return MediaItem{}, fmt.Errorf("read metadata for %s: %w", path, err)
+		return item, nil
+	}
+	out, _, err := diagnosticCommandContext(ctx, probe, 15*time.Second, "-v", "error", "-show_format", "-show_streams", "-of", "json", "--", item.Source)
+	if err != nil {
+		return item, nil
 	}
 	var doc probeDocument
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
-		return MediaItem{}, fmt.Errorf("read metadata for %s: %w", path, err)
+		return item, nil
 	}
 	mediaTag := func(names ...string) string {
 		if value := tag(doc.Format.Tags, names...); value != "" {
@@ -231,7 +227,8 @@ func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
 				break
 			}
 			if _, err := os.Stat(item.Artwork); os.IsNotExist(err) {
-				_, _, extractErr := diagnosticCommandContext(ctx, "ffmpeg", 15*time.Second, "-nostdin", "-v", "error", "-i", item.Source, "-map", "0:v:0", "-frames:v", "1", "-y", item.Artwork)
+				ffmpeg, _ := toolPath("ffmpeg")
+				_, _, extractErr := diagnosticCommandContext(ctx, ffmpeg, 15*time.Second, "-nostdin", "-v", "error", "-i", item.Source, "-map", "0:v:0", "-frames:v", "1", "-y", item.Artwork)
 				if extractErr != nil {
 					item.Artwork = ""
 				}

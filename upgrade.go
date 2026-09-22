@@ -170,11 +170,6 @@ func upgradeDaemon() error {
 			return err
 		}
 	}
-	if snapshot.Episode != nil {
-		if err := checkPodcastRequirements(); err != nil {
-			return err
-		}
-	}
 	if snapshot.Item != nil {
 		if err := checkMediaRequirements([]MediaItem{*snapshot.Item}); err != nil {
 			return err
@@ -210,7 +205,7 @@ func upgradeDaemon() error {
 	return err
 }
 
-// restore applies the whole snapshot before starting mpv, so a muted or paused
+// restore applies the whole snapshot before starting playback, so a muted or paused
 // stream is never briefly audible during handoff.
 func (d *Daemon) restore(arg string) string {
 	var snapshot playbackSnapshot

@@ -2,7 +2,6 @@
 # This plays chillhop, shows its live spectrum, and stops it again.
 
 Require go
-Require mpv
 Require ffmpeg
 Require yt-dlp
 

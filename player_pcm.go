@@ -2,130 +2,130 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/binary"
+	"errors"
 	"fmt"
-	"io"
-	"net/url"
-	"os"
-	"os/exec"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
-
 	"github.com/willibrandon/chill/internal/audio"
+	"github.com/willibrandon/chill/internal/playback"
 	"github.com/willibrandon/chill/internal/streammeta"
+	"io"
+	"math"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
-// pcmPlayer owns one resolver, one decoder and one audio output. Only the
-// decoder opens the resolved media stream. The bounded tap sees exactly the
-// samples delivered to mpv, and never performs analysis on the playback path.
+var openAudioOutput = func(settings playback.Settings, volume int, muted, paused bool) (*playback.Output, error) {
+	return playback.NewOutput(settings, playback.OpenDevice, volume, muted, paused)
+}
+
 type pcmPlayer struct {
-	output     *mpvPlayer
-	pipe       *os.File
-	buffer     audio.Buffer
-	equalizer  *audio.Equalizer
-	ctx        context.Context
-	cancel     context.CancelFunc
-	event      chan playerEvent
-	watchDone  chan struct{}
-	once       sync.Once
-	loaded     bool // commands are serialized by the daemon
-	decoderMu  sync.Mutex
-	decoders   sync.WaitGroup
-	prepared   *preparedDecoder
-	active     *preparedDecoder
-	offset     time.Duration
-	base       time.Duration
-	finite     bool
-	sampleRate int
-	audio      AudioSettings
+	output           *playback.Output
+	buffer           audio.Buffer
+	equalizer        *audio.Equalizer
+	ctx              context.Context
+	cancel           context.CancelFunc
+	event            chan playerEvent
+	watchDone        chan struct{}
+	once             sync.Once
+	loaded           bool
+	decoderMu        sync.Mutex
+	renderMu         sync.Mutex
+	decoders         sync.WaitGroup
+	prepared, active *preparedDecoder
+	offset           time.Duration
+	finite           bool
+	sampleRate       int
+	audio            AudioSettings
+	speed            atomic.Uint64
+	nextID           atomic.Uint64
 }
-
 type preparedDecoder struct {
-	source   string
-	offset   time.Duration
-	finite   bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	activate chan struct{}
-	ready    chan struct{}
-	once     sync.Once
-	mu       sync.Mutex
-	started  bool
-	complete bool
-	err      error
-	duration time.Duration
-	artwork  string
+	source                    string
+	offset                    time.Duration
+	finite                    bool
+	id                        uint64
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	activate, ready, selected chan struct{}
+	announced                 sync.Once
+	once                      sync.Once
+	mu                        sync.Mutex
+	started, complete         bool
+	err                       error
+	duration                  time.Duration
+	artwork                   string
+	title                     string
 }
 
-func (decoder *preparedDecoder) start() {
-	decoder.once.Do(func() {
-		decoder.mu.Lock()
-		decoder.started = true
-		decoder.mu.Unlock()
-		close(decoder.activate)
-	})
+func (d *preparedDecoder) start() {
+	d.once.Do(func() { d.mu.Lock(); d.started = true; d.mu.Unlock(); close(d.activate) })
 }
-
-func (decoder *preparedDecoder) finish(err error) (bool, error) {
-	decoder.mu.Lock()
-	defer decoder.mu.Unlock()
-	decoder.complete, decoder.err = true, err
-	return decoder.started, err
+func (d *preparedDecoder) failed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.complete && d.err != nil
 }
-
-func (decoder *preparedDecoder) failed() bool {
-	decoder.mu.Lock()
-	defer decoder.mu.Unlock()
-	return decoder.complete
-}
-
 func startPCMPlayer(volume int, muted, paused bool) (player, error) {
 	return newPCMPlayer(volume, muted, paused, 0, false)
 }
-
 func newPCMPlayer(volume int, muted, paused bool, offset time.Duration, finite bool) (player, error) {
 	settings, err := loadPlaybackSettings()
 	if err != nil {
-		settings = defaultPlaybackSettings()
+		return nil, err
 	}
 	return startPCMPlayerWithAudio(volume, muted, paused, offset, finite, settings.Audio)
 }
-
+func outputSettings(settings AudioSettings) playback.Settings {
+	settings = normalizeAudioSettings(settings)
+	return playback.Settings{Device: settings.Device, SampleRate: settings.SampleRate, BufferMS: settings.BufferMS, Exclusive: settings.Exclusive}
+}
 func startPCMPlayerWithAudio(volume int, muted, paused bool, offset time.Duration, finite bool, settings AudioSettings) (player, error) {
-	read, write, err := os.Pipe()
+	settings = normalizeAudioSettings(settings)
+	output, err := openAudioOutput(outputSettings(settings), volume, muted, paused)
 	if err != nil {
-		return nil, err
-	}
-	sampleRate, mpvOptions, _ := audioSettingsArgs(settings)
-	output, err := startMPV(volume, muted, paused, read, mpvOptions)
-	read.Close()
-	if err != nil {
-		write.Close()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &pcmPlayer{output: output, pipe: write, ctx: ctx, cancel: cancel,
-		offset: offset, finite: finite, sampleRate: sampleRate, audio: normalizeAudioSettings(settings),
-		buffer: audio.NewBuffer(sampleRate), equalizer: audio.NewEqualizer(sampleRate),
-		event: make(chan playerEvent, 8), watchDone: make(chan struct{})}
+	p := &pcmPlayer{output: output, ctx: ctx, cancel: cancel, offset: offset, finite: finite, sampleRate: settings.SampleRate, audio: settings, buffer: audio.NewBuffer(settings.SampleRate), equalizer: audio.NewEqualizer(settings.SampleRate), event: make(chan playerEvent, 16), watchDone: make(chan struct{})}
+	p.speed.Store(math.Float64bits(1))
 	go p.watch()
 	return p, nil
 }
-
-func (p *pcmPlayer) events() <-chan playerEvent { return p.event }
-func (p *pcmPlayer) audioFrame() audio.Frame    { return p.buffer.Snapshot() }
-func (p *pcmPlayer) setEqualizer(bands audio.EqualizerBands) {
-	p.equalizer.SetBands(bands)
+func (p *pcmPlayer) events() <-chan playerEvent          { return p.event }
+func (p *pcmPlayer) audioFrame() audio.Frame             { return p.buffer.Snapshot() }
+func (p *pcmPlayer) setEqualizer(b audio.EqualizerBands) { p.equalizer.SetBands(b) }
+func (p *pcmPlayer) setPaused(v bool) error              { p.output.SetPaused(v); return nil }
+func (p *pcmPlayer) setMuted(v bool) error               { p.output.SetMuted(v); return nil }
+func (p *pcmPlayer) setVolume(v int) error               { p.output.SetVolume(v); return nil }
+func (p *pcmPlayer) setSpeed(v float64) error {
+	if math.IsNaN(v) || v < 0.5 || v > 3 {
+		return fmt.Errorf("speed must be between 0.5 and 3")
+	}
+	p.speed.Store(math.Float64bits(v))
+	return nil
 }
+func (p *pcmPlayer) setDevice(v string) error { return p.output.SetDevice(v) }
 func (p *pcmPlayer) position() time.Duration {
 	p.decoderMu.Lock()
-	offset, base := p.offset, p.base
+	d := p.active
+	offset := p.offset
 	p.decoderMu.Unlock()
-	return offset + max(time.Duration(0), time.Duration(p.output.positionNS.Load())-base)
+	if p.output == nil {
+		return offset
+	}
+	id, pos := p.output.Position()
+	if d != nil && id == d.id {
+		return pos
+	}
+	return offset
 }
-
+func (p *pcmPlayer) emit(e playerEvent) {
+	select {
+	case p.event <- e:
+	case <-p.ctx.Done():
+	}
+}
 func (p *pcmPlayer) emitNowPlaying(raw string) {
 	now := streammeta.Parse(raw)
 	select {
@@ -134,341 +134,235 @@ func (p *pcmPlayer) emitNowPlaying(raw string) {
 	default:
 	}
 }
-
-func (p *pcmPlayer) emit(event playerEvent) {
-	select {
-	case p.event <- event:
-	case <-p.ctx.Done():
-	}
-}
-
-// Raw-input mpv can announce file-loaded before the extractor or decoder has
-// produced audio. Playing is only true once both output and PCM are ready.
 func (p *pcmPlayer) watch() {
 	defer close(p.watchDone)
-	emit := func(e playerEvent) {
-		select {
-		case p.event <- e:
-		case <-p.ctx.Done():
-		}
-	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	var block [8192 * 8]byte
 	for {
 		select {
-		case e := <-p.output.events():
-			if e.err != "" {
-				e.output = true
-				emit(e)
-				return
-			}
 		case <-p.ctx.Done():
 			return
+		case <-tick.C:
+			if err := p.output.Err(); err != nil {
+				p.emit(playerEvent{err: err.Error(), output: true})
+				return
+			}
+			if n := p.output.ReadAnalysis(block[:]); n > 0 {
+				p.buffer.Push(block[:n])
+			}
 		}
 	}
 }
-
-func (p *pcmPlayer) command(args ...any) error {
-	if len(args) > 0 && args[0] == "loadfile" {
-		if p.loaded || len(args) < 2 {
-			return fmt.Errorf("PCM player requires a new instance for each stream")
-		}
-		source, ok := args[1].(string)
-		if !ok {
-			return fmt.Errorf("invalid stream URL")
-		}
-		p.loaded = true
-		decoder := p.prepare(source, p.offset, p.finite)
-		if err := p.output.command("loadfile", "fd://0", "replace"); err != nil {
-			decoder.cancel()
-			return err
-		}
-		p.decoderMu.Lock()
-		if p.prepared == decoder {
-			p.prepared = nil
-		}
-		p.active = decoder
-		p.decoderMu.Unlock()
-		decoder.start()
-		return nil
+func (p *pcmPlayer) load(source string) error {
+	if p.loaded {
+		return fmt.Errorf("player already has a source")
 	}
-	return p.output.command(args...)
+	p.loaded = true
+	d := p.prepare(source, p.offset, p.finite)
+	p.decoderMu.Lock()
+	p.prepared = nil
+	p.active = d
+	close(d.selected)
+	p.decoderMu.Unlock()
+	d.start()
+	return nil
 }
-
 func (p *pcmPlayer) close() {
-	p.once.Do(func() {
-		p.cancel()
-		p.pipe.Close() // unblocks a write even when output is paused
-		p.output.close()
-		<-p.watchDone
-		p.decoders.Wait()
-		close(p.event)
-	})
+	p.once.Do(func() { p.cancel(); p.output.Close(); <-p.watchDone; p.decoders.Wait(); close(p.event) })
 }
-
 func (p *pcmPlayer) prepare(source string, offset time.Duration, finite bool) *preparedDecoder {
 	ctx, cancel := context.WithCancel(p.ctx)
-	decoder := &preparedDecoder{source: source, offset: offset, finite: finite, ctx: ctx, cancel: cancel, activate: make(chan struct{}), ready: make(chan struct{})}
+	d := &preparedDecoder{source: source, offset: offset, finite: finite, id: p.nextID.Add(1), ctx: ctx, cancel: cancel, activate: make(chan struct{}), ready: make(chan struct{}), selected: make(chan struct{})}
 	p.decoderMu.Lock()
 	if p.prepared != nil {
 		p.prepared.cancel()
 	}
-	p.prepared = decoder
+	p.prepared = d
 	p.decoderMu.Unlock()
-	p.decoders.Add(1)
-	go func() {
-		defer p.decoders.Done()
-		err := p.decode(decoder)
-		started, err := decoder.finish(err)
-		if decoder.ctx.Err() != nil || p.ctx.Err() != nil {
+	p.decoders.Go(func() {
+		defer cancel()
+		err := p.decode(d)
+		d.mu.Lock()
+		d.complete = true
+		d.err = err
+		started := d.started
+		d.mu.Unlock()
+		if ctx.Err() != nil || !started {
 			return
 		}
-		if !started {
+		select {
+		case <-d.selected:
+		case <-ctx.Done():
 			return
-		} else if err != nil {
-			p.emit(playerEvent{err: err.Error()})
+		}
+		if err != nil {
+			_, missing := errors.AsType[*requirementsError](err)
+			_, invalidConfig := errors.AsType[*toolConfigError](err)
+			p.emit(playerEvent{err: err.Error(), permanent: missing || invalidConfig})
 		} else {
 			p.emit(playerEvent{ended: true})
 		}
-	}()
-	return decoder
+	})
+	return d
 }
-
 func (p *pcmPlayer) preload(source string, offset time.Duration, finite bool) {
 	p.decoderMu.Lock()
-	if p.prepared != nil && p.prepared.source == source && p.prepared.offset == offset && p.prepared.finite == finite {
-		p.decoderMu.Unlock()
-		return
-	}
+	d := p.prepared
+	match := d != nil && d.source == source && d.offset == offset && d.finite == finite
 	p.decoderMu.Unlock()
-	p.prepare(source, offset, finite)
+	if !match {
+		p.prepare(source, offset, finite)
+	}
 }
 
+func (p *pcmPlayer) cancelPreload() {
+	p.decoderMu.Lock()
+	defer p.decoderMu.Unlock()
+	if p.prepared != nil {
+		p.prepared.cancel()
+		p.prepared = nil
+	}
+}
+
+// The playback controller calls this only after checking its current policy.
+func (p *pcmPlayer) startHandoff(active uint64) {
+	p.decoderMu.Lock()
+	defer p.decoderMu.Unlock()
+	if p.active != nil && p.active.id == active && p.prepared != nil && !p.prepared.failed() {
+		p.prepared.start()
+	}
+}
+
+func (p *pcmPlayer) announce(d *preparedDecoder) {
+	d.announced.Do(func() {
+		p.emit(playerEvent{loaded: true})
+		d.mu.Lock()
+		title := d.title
+		d.mu.Unlock()
+		if title != "" {
+			p.emitNowPlaying(title)
+		}
+	})
+}
 func (p *pcmPlayer) transition(source string, offset time.Duration, finite bool) bool {
 	p.decoderMu.Lock()
-	decoder := p.prepared
-	if decoder == nil || decoder.source != source || decoder.offset != offset || decoder.finite != finite || decoder.failed() {
-		p.decoderMu.Unlock()
+	defer p.decoderMu.Unlock()
+	d := p.prepared
+	if d == nil || d.source != source || d.offset != offset || d.finite != finite || d.failed() {
 		return false
 	}
 	p.prepared = nil
-	if p.active != nil {
-		p.base += p.active.duration
-	}
-	p.active = decoder
+	p.active = d
 	p.offset = offset
-	p.decoderMu.Unlock()
-	decoder.start()
+	close(d.selected)
+	d.start()
+	select {
+	case <-d.ready:
+		p.announce(d)
+	default:
+	}
 	return true
 }
-
-type resolvedAudio struct {
-	// URL is the resolved media address consumed by FFmpeg.
-	URL string `json:"url"`
-	// Headers contains the extractor's required request headers.
-	Headers map[string]string `json:"http_headers"`
-	// Artwork is a safely cached provider image for the active item.
-	Artwork string `json:"artwork,omitempty"`
+func (p *pcmPlayer) artwork() string {
+	p.decoderMu.Lock()
+	d := p.active
+	p.decoderMu.Unlock()
+	if d == nil {
+		return ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.artwork
 }
-
-var (
-	findExtractor        = findYtdl
-	runDiagnosticCommand = diagnosticCommandContext
-)
-
-func resolveAudio(ctx context.Context, source string) (resolvedAudio, error) {
-	return resolveAudioWithCookies(ctx, source, "")
-}
-
-func resolveAudioWithCookies(ctx context.Context, source, cookiesFrom string) (resolvedAudio, error) {
-	if err := ctx.Err(); err != nil {
-		return resolvedAudio{}, err
-	}
-	u, err := url.Parse(source)
-	if err != nil {
-		// Local filenames can contain percent signs that are not URL escapes.
-		if !strings.Contains(source, "://") {
-			return resolvedAudio{URL: source}, nil
-		}
-		return resolvedAudio{}, err
-	}
-	if u.Scheme == "chill-provider" {
-		return resolveProviderAudio(ctx, source)
-	}
-	// Local media and direct radio URLs do not need extraction. YouTube page
-	// URLs do; yt-dlp supplies the signed URL and required HTTP headers together.
-	if !sourceNeedsYtdl(source) {
-		return resolvedAudio{URL: source}, nil
-	}
-	mpv, _ := exec.LookPath("mpv")
-	extractor := findExtractor(mpv)
-	if extractor == "" {
-		return resolvedAudio{}, fmt.Errorf("yt-dlp not found")
-	}
-	args := []string{
-		"--ignore-config", "--no-playlist", "--no-progress", "--socket-timeout", "10",
-		"--retries", "0", "--format", extractorAudioFormat(source), "--print", `{"url":%(url)j,"http_headers":%(http_headers)j}`,
-	}
-	if cookiesFrom != "" {
-		args = append(args, "--cookies-from-browser", cookiesFrom)
-	}
-	args = append(args, "--", source)
-	stdout, stderr, err := runDiagnosticCommand(ctx, extractor, 35*time.Second, args...)
-	if err != nil {
-		return resolvedAudio{}, fmt.Errorf("stream resolution: %w; %s", err, stderr)
-	}
-	var resolved resolvedAudio
-	if err := json.Unmarshal([]byte(stdout), &resolved); err != nil {
-		return resolvedAudio{}, fmt.Errorf("stream resolution: %w", err)
-	}
-	if resolved.URL == "" {
-		return resolvedAudio{}, fmt.Errorf("extractor returned no audio URL")
-	}
-	return resolved, nil
-}
-
-func extractorAudioFormat(source string) string {
-	u, err := url.Parse(source)
-	if err == nil {
-		host := strings.ToLower(u.Hostname())
-		if host == "mixcloud.com" || strings.HasSuffix(host, ".mixcloud.com") {
-			return "bestaudio[protocol=https]/bestaudio[protocol=http]/bestaudio[protocol=m3u8_native]/bestaudio[protocol=m3u8]/bestaudio/best"
-		}
-	}
-	return "bestaudio/best"
-}
-
-func (p *pcmPlayer) decode(decoder *preparedDecoder) error {
-	resolved, err := resolveAudio(decoder.ctx, decoder.source)
-	if err != nil {
-		return err
-	}
-	if err := decoder.ctx.Err(); err != nil {
-		return err
-	}
-	decoder.mu.Lock()
-	decoder.artwork = resolved.Artwork
-	decoder.mu.Unlock()
-	logLevel := "error"
-	if !decoder.finite {
-		logLevel = "info"
-	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", logLevel}
-	remote := strings.HasPrefix(resolved.URL, "https://") || strings.HasPrefix(resolved.URL, "http://")
-	input := resolved.URL
-	var liveBody io.ReadCloser
-	if remote && !p.finite {
-		live, openErr := streammeta.Open(decoder.ctx, resolved.URL, resolved.Headers, p.emitNowPlaying)
-		if openErr == nil {
-			if live.Playlist {
-				live.Body.Close()
-			} else {
-				liveBody, input = live.Body, "pipe:0"
-				defer liveBody.Close()
+func (p *pcmPlayer) decode(d *preparedDecoder) error {
+	reader, artwork, err := openPCM(d.ctx, d.source, d.offset, d.finite, p.audio, func(title string) {
+		d.mu.Lock()
+		d.title = title
+		d.mu.Unlock()
+		p.decoderMu.Lock()
+		active := p.active == d
+		p.decoderMu.Unlock()
+		if active && d.ctx.Err() == nil {
+			select {
+			case <-d.ready:
+				p.emitNowPlaying(title)
+			default:
 			}
 		}
-	}
-	if remote && liveBody == nil {
-		args = append(args, "-rw_timeout", "15000000")
-		var headers strings.Builder
-		for key, value := range resolved.Headers {
-			if !strings.ContainsAny(key+value, "\r\n") {
-				fmt.Fprintf(&headers, "%s: %s\r\n", key, value)
-			}
-		}
-		if headers.Len() > 0 {
-			args = append(args, "-headers", headers.String())
-		}
-	}
-	// Input pacing and small output buffers keep analysis close to audible
-	// playback even for local files, which otherwise decode as fast as possible.
-	if !decoder.finite {
-		args = append(args, "-re")
-	}
-	if decoder.offset > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%.6f", decoder.offset.Seconds()))
-	}
-	_, _, filterArgs := audioSettingsArgs(p.audio)
-	args = append(args, "-i", input, "-map", "0:a:0", "-vn", "-sn", "-dn")
-	args = append(args, filterArgs...)
-	args = append(args, "-ac", "2", "-ar", strconv.Itoa(p.sampleRate), "-c:a", "pcm_f32le", "-f", "f32le", "pipe:1")
-	cmd := exec.Command("ffmpeg", args...)
-	var diagnostics tailBuffer
-	cmd.Stderr = newMetadataDiagnostics(&diagnostics, p.emitNowPlaying)
-	if liveBody != nil {
-		cmd.Stdin = liveBody
-	}
-	stdout, err := cmd.StdoutPipe()
+	})
 	if err != nil {
 		return err
 	}
-	tree, err := startInTree(cmd)
-	if err != nil {
-		stdout.Close()
-		return fmt.Errorf("starting decoder: %w", err)
-	}
-	var killed sync.Once
-	kill := func() { killed.Do(func() { tree.kill() }) }
-	stop := context.AfterFunc(decoder.ctx, kill)
-	defer stop()
-	defer kill()
-	var block [512 * 8]byte // 10.7 ms, always whole stereo sample frames
-	var copyErr error
-	ready, announced := false, false
-	written := int64(0)
+	defer reader.Close()
+	d.mu.Lock()
+	d.artwork = artwork
+	d.mu.Unlock()
+	tempo := playback.NewTempo(reader, p.sampleRate, func() float64 {
+		if !d.finite {
+			return 1
+		}
+		return math.Float64frombits(p.speed.Load())
+	})
+	var block [512 * 8]byte
+	ready := false
+	position := d.offset
 	for {
-		n, readErr := io.ReadFull(stdout, block[:])
+		n, advance, readErr := tempo.Read(block[:])
 		if n > 0 {
-			n -= n % 8
-			if !ready && n > 0 {
-				close(decoder.ready)
+			if !ready {
+				close(d.ready)
 				select {
-				case <-decoder.activate:
-				case <-decoder.ctx.Done():
-					return decoder.ctx.Err()
+				case <-d.activate:
+				case <-d.ctx.Done():
+					return d.ctx.Err()
 				}
 				ready = true
+				select {
+				case <-d.selected:
+					p.announce(d)
+				default:
+				}
 			}
+			if p.audio.Mono {
+				for i := 0; i+8 <= n; i += 8 {
+					a := math.Float32frombits(binary.LittleEndian.Uint32(block[i:]))
+					b := math.Float32frombits(binary.LittleEndian.Uint32(block[i+4:]))
+					v := math.Float32bits((a + b) / 2)
+					binary.LittleEndian.PutUint32(block[i:], v)
+					binary.LittleEndian.PutUint32(block[i+4:], v)
+				}
+			}
+			p.renderMu.Lock()
 			p.equalizer.Process(block[:n])
-			if _, copyErr = p.pipe.Write(block[:n]); copyErr != nil {
-				break
+			step := advance / float64(n/8) * float64(time.Second) / float64(p.sampleRate)
+			err := p.output.Write(d.ctx, block[:n], d.id, position, step)
+			p.renderMu.Unlock()
+			if err != nil {
+				return err
 			}
-			written += int64(n)
-			p.buffer.Push(block[:n])
-			if ready && !announced {
-				p.emit(playerEvent{loaded: true})
-				announced = true
-			}
+			position += time.Duration(float64(n/8) * step)
 		}
 		if readErr != nil {
-			if readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-				copyErr = readErr
+			if !errors.Is(readErr, io.EOF) {
+				return readErr
 			}
 			break
 		}
 	}
-	if copyErr != nil {
-		kill()
+	if !ready {
+		return fmt.Errorf("source produced no audio")
 	}
-	err = cmd.Wait()
-	decoder.mu.Lock()
-	decoder.duration = time.Duration(float64(written) / (float64(p.sampleRate) * 2 * 4) * float64(time.Second))
-	decoder.mu.Unlock()
-	if decoder.ctx.Err() != nil {
-		return decoder.ctx.Err()
-	}
-	if err != nil {
-		return fmt.Errorf("audio decoder: %w; %s", err, diagnostics.String())
-	}
-	return copyErr
-}
-
-func (p *pcmPlayer) artwork() string {
+	d.mu.Lock()
+	d.duration = position - d.offset
+	d.mu.Unlock()
+	through := p.output.Written()
+	// Ask the controller to revalidate the queue before a preload is audible.
 	p.decoderMu.Lock()
-	decoder := p.active
+	handoff := p.active == d && p.prepared != nil
 	p.decoderMu.Unlock()
-	if decoder == nil {
-		return ""
+	if handoff {
+		p.emit(playerEvent{handoff: d.id})
 	}
-	decoder.mu.Lock()
-	defer decoder.mu.Unlock()
-	return decoder.artwork
+	return p.output.Drain(d.ctx, through)
 }

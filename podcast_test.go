@@ -16,6 +16,7 @@ import (
 
 // TestPodcastLibraryIdentityResumeAndCorruption checks saved progress and unreadable files.
 func TestPodcastLibraryIdentityResumeAndCorruption(t *testing.T) {
+	useTestAudio(t)
 	withConfigDir(t)
 	l, err := loadPodcastLibrary()
 	if err != nil {
@@ -51,18 +52,11 @@ func TestPodcastLibraryIdentityResumeAndCorruption(t *testing.T) {
 
 // TestPodcastPlaybackIntegration checks real episode playback, seeking, completion, and replay.
 func TestPodcastPlaybackIntegration(t *testing.T) {
-	if err := checkPodcastRequirements(); err != nil {
-		t.Fatal(err)
-	}
+	useTestAudio(t)
 	tmp := os.TempDir()
 	withConfigDir(t)
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(key, tmp)
-	}
-	config := t.TempDir()
-	t.Setenv("MPV_HOME", config)
-	if err := os.WriteFile(filepath.Join(config, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
-		t.Fatal(err)
 	}
 	wav := stereoFixture(t, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, wav) }))
@@ -98,15 +92,11 @@ func TestPodcastPlaybackIntegration(t *testing.T) {
 
 // TestPodcastQueueFinishesInOrder checks automatic playback and final played marks.
 func TestPodcastQueueFinishesInOrder(t *testing.T) {
+	useTestAudio(t)
 	tmp := os.TempDir()
 	withConfigDir(t)
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(key, tmp)
-	}
-	config := t.TempDir()
-	t.Setenv("MPV_HOME", config)
-	if err := os.WriteFile(filepath.Join(config, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
-		t.Fatal(err)
 	}
 	wav := stereoFixture(t, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, wav) }))
@@ -139,6 +129,7 @@ func TestPodcastQueueFinishesInOrder(t *testing.T) {
 
 // TestPodcastControlsRejectInvalidInput checks seek, speed, and dependency errors.
 func TestPodcastControlsRejectInvalidInput(t *testing.T) {
+	useTestAudio(t)
 	withConfigDir(t)
 	d := &Daemon{}
 	wantReply(t, d.execute("seek", "30"), false, "finite media")
@@ -157,20 +148,16 @@ func TestPodcastControlsRejectInvalidInput(t *testing.T) {
 
 // TestPodcastM4ASeek verifies seeking a container whose index is at the end.
 func TestPodcastM4ASeek(t *testing.T) {
-	if err := checkPodcastRequirements(); err != nil {
-		t.Fatal(err)
-	}
+	useTestAudio(t)
 	tmp := os.TempDir()
 	withConfigDir(t)
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(key, tmp)
 	}
-	config := t.TempDir()
-	t.Setenv("MPV_HOME", config)
-	if err := os.WriteFile(filepath.Join(config, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	media := filepath.Join(t.TempDir(), "episode.m4a")
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("FFmpeg codec integration requires ffmpeg")
+	}
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-i", stereoFixture(t, 8), "-c:a", "aac", media).CombinedOutput(); err != nil {
 		t.Fatalf("creating AAC fixture: %v %s", err, out)
 	}

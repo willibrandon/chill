@@ -13,7 +13,7 @@ func TestForegroundEqualizerControlsPersist(t *testing.T) {
 	withConfigDir(t)
 	m := &foregroundModel{
 		station:  &Station{Name: "test", Desc: "Test audio"},
-		player:   &pcmPlayer{output: &mpvPlayer{}, equalizer: audio.NewEqualizer(audio.SampleRate)},
+		player:   &pcmPlayer{equalizer: audio.NewEqualizer(audio.SampleRate)},
 		settings: defaultPlaybackSettings(),
 		eq:       equalizerConfig{Preset: "Rock"},
 		state:    "playing",
@@ -33,7 +33,7 @@ func TestForegroundEqualizerControlsPersist(t *testing.T) {
 func TestForegroundLayoutIsBounded(t *testing.T) {
 	m := &foregroundModel{
 		station:  &Station{Name: "test", Desc: strings.Repeat("long ", 30)},
-		player:   &pcmPlayer{output: &mpvPlayer{}},
+		player:   &pcmPlayer{},
 		settings: defaultPlaybackSettings(),
 		eq:       equalizerConfig{Preset: "Rock"},
 		state:    "playing",
@@ -65,7 +65,7 @@ func TestForegroundStatusContentUsesInterfaceProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &foregroundModel{
-		station: &Station{Name: "test", Desc: "Test audio"}, player: &pcmPlayer{output: &mpvPlayer{}},
+		station: &Station{Name: "test", Desc: "Test audio"}, player: &pcmPlayer{},
 		settings: defaultPlaybackSettings(), eq: equalizerConfig{Preset: "Flat"}, state: "playing",
 		presentation: settings, width: 80, height: 12, muted: true,
 	}
@@ -82,7 +82,7 @@ func TestForegroundStatusContentUsesInterfaceProfile(t *testing.T) {
 // TestForegroundQueuePreservesPlaybackModes checks finite-media status parity.
 func TestForegroundQueuePreservesPlaybackModes(t *testing.T) {
 	m := &foregroundMediaModel{
-		items: []MediaItem{{Kind: MediaTrack, ID: "track", Title: "Track"}}, player: &pcmPlayer{output: &mpvPlayer{}},
+		items: []MediaItem{{Kind: MediaTrack, ID: "track", Title: "Track"}}, player: &pcmPlayer{},
 		settings: defaultPlaybackSettings(), eq: equalizerConfig{Preset: "Flat"}, state: "playing", rate: 1,
 		presentation: defaultInterfaceSettings(), width: 120, height: 20, muted: true, shuffle: true, repeat: "all",
 	}

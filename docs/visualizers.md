@@ -8,26 +8,23 @@ The daemon owns playback for the lifetime of a station. `pcmPlayer` implements
 the existing `player` interface, so volume, mute, pause, sleep, reconnects and
 daemon upgrades retain the same control path. Each player owns:
 
-1. A cancellable yt-dlp resolution for YouTube, including required HTTP headers.
-   Direct media URLs and local files go straight to the decoder.
-2. One FFmpeg decoder producing interleaved stereo float32 little-endian PCM at
-   48 kHz. FFmpeg is an explicit install and doctor requirement.
-3. One ten-band parametric equalizer that processes PCM in the decoder pump.
-4. One mpv output process reading PCM from stdin, controlled through JSON IPC.
-5. A fixed-size PCM ring in `internal/audio`.
+1. A cancellable source, with yt-dlp used only for supported website pages.
+2. A built-in decoder for MP3, FLAC, PCM WAV, or Vorbis, with FFmpeg for additional
+   formats and segmented streams.
+3. Sample-rate conversion, pitch-preserving speed, mono processing, and the
+   existing ten-band equalizer.
+4. Bounded PCM transport into an embedded native output device.
+5. A separate bounded analysis ring fed from consumed, post-EQ, pre-volume samples.
 
-The pump equalizes each PCM block once, then sends the same samples to mpv and
-the ring. It never performs FFT or terminal/network I/O. Analysis has its own
-lock and copies samples under the ring lock before computing. Snapshot results
-are cached for 1/30 second across subscribers. A subscriber can be slow without
-backing up the audio pipe. FFmpeg input pacing, disabled mpv read-ahead and a
-small output buffer limit the visual lead; this is not hardware-clock-exact
-presentation synchronization.
+The device callback performs no decoding, FFT, network access, or process waits.
+Analysis runs independently, so slow subscribers cannot delay audio. Callback
+consumption drives position and the visualizer; backend hardware buffering can
+still add presentation latency.
 
-Cancellation closes the pipe and terminates both process trees. It also cancels
-an in-flight extractor, including its runtime children. The daemon waits for
-cleanup before replacing a player. Media EOF or decoder failure flows through
-the existing reconnect policy. There is no second stream request for analysis.
+Cancellation closes sources, wakes blocked producers, and terminates and reaps
+owned subprocess trees. Track completion waits for queued samples to drain.
+Missing optional tools produce an actionable error instead of a reconnect loop.
+There is no second live stream connection for analysis.
 
 ## Analysis contract
 
@@ -39,7 +36,7 @@ the existing reconnect policy. There is no second stream request for analysis.
 - Contiguous stereo samples for scope and phase displays.
 - Timestamp and sequence for identifying absent/stale audio.
 
-The analysis point is after Chill's equalizer and before mpv volume/mute. UI
+The analysis point is after Chill's equalizer and before output volume/mute. UI
 labels call this post-EQ audio: changing the curve changes the picture, while a
 volume or mute change does not.
 
@@ -85,8 +82,8 @@ existing player contract and optional `audioFrame() audio.Frame` method.
 - Renderer tests cover every mode, tiny/resized canvases, purity and peak decay.
 - Subscription/UI tests cover slow readers, pause, stale messages and focus.
 - `TestPCMIntegration` runs in the normal `go test ./...` suite and exercises
-  real FFmpeg → PCM → mpv with local stereo fixtures and null audio output,
-  including start-paused, decoder failure and cleanup. Missing mpv or FFmpeg
-  fails the suite with installation instructions; there is no opt-in flag.
+  native/FFmpeg → PCM → native output with local stereo fixtures and a paced test device,
+  including start-paused, decoder failure and cleanup. Native tests require no
+  external tools; additional codec integration tests use FFmpeg.
 - CI installs FFmpeg and exercises playback across macOS, Linux and Windows.
   The separate YouTube workflow verifies the external extractor/network path.

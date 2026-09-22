@@ -20,29 +20,32 @@ scoop bucket add extras
 scoop install chill
 ```
 
-Both packages include mpv, FFmpeg, yt-dlp, and Deno.
+Both packages include FFmpeg, yt-dlp, and Deno for full playback. Audio output is built into Chill.
 
 ### Go or release binary
 
-Install [mpv](https://mpv.io/), [FFmpeg](https://ffmpeg.org/), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
-and [Deno](https://deno.com/) first.
+MP3, FLAC, PCM WAV, and Ogg Vorbis play with Chill alone. For built-in YouTube
+stations and additional formats, install [FFmpeg](https://ffmpeg.org/),
+[yt-dlp](https://github.com/yt-dlp/yt-dlp), and [Deno](https://deno.com/).
+See [playback dependencies and diagnostics](docs/dependencies.md) for optional
+capabilities, portable installations, and alternate JavaScript runtimes.
 
 macOS:
 ```bash
-brew install mpv ffmpeg yt-dlp deno
+brew install ffmpeg yt-dlp deno
 ```
 
 Linux:
 ```bash
-sudo apt install mpv ffmpeg pipx
-pipx install yt-dlp
+sudo apt install ffmpeg pipx
+pipx install 'yt-dlp[default]'
 ```
 
 Also install [Deno](https://docs.deno.com/runtime/getting_started/installation/).
 
 Windows:
 ```powershell
-choco install mpv ffmpeg yt-dlp deno
+choco install ffmpeg yt-dlp deno
 ```
 
 Then install chill:
@@ -118,11 +121,11 @@ chill update                      # install the latest release
 
 ## Architecture
 
-chill runs mpv in the background, so music keeps playing when you close the
+chill owns audio playback in its background daemon, so music keeps playing when you close the
 terminal. You can control it from another terminal.
 
 ```text
-yt-dlp resolves → FFmpeg decodes → 10-band EQ → daemon PCM pipe → mpv audio output
+native decoder or yt-dlp/FFmpeg → speed/mono/EQ → bounded PCM → native audio output
                                            │
                                       bounded audio tap
                                            │
@@ -141,8 +144,8 @@ The daemon decodes each source into configurable stereo float PCM. Local albums 
 next decoder and keep the PCM output open across track boundaries. Visualizers analyze the
 post-EQ samples sent to playback; they do not open another network stream or
 capture system audio. FFT work runs only while a REPL is subscribed. `doctor`
-checks the new FFmpeg dependency as well as mpv, yt-dlp, and the YouTube
-JavaScript runtime.
+reports native playback and optional FFmpeg, yt-dlp, probing, and JavaScript
+runtime capabilities. Explicit source checks verify actual decoding.
 
 If a stream disconnects, chill keeps reconnecting with increasing delays, capped
 at 30 seconds. `--status` and the REPL show the retry count and countdown; JSON
@@ -425,10 +428,14 @@ system play, pause, stop, next, previous, and volume controls.
 
 ## Build and test
 
-Install mpv and FFmpeg (including ffprobe) first. The normal test suite includes real playback
-integration tests using generated local audio and null output—no audio device,
-network access, or test opt-in environment variables are needed. Missing test
-dependencies fail with installation instructions.
+Building requires Go and a C compiler with CGO enabled (Xcode command-line tools
+on macOS, GCC or Clang on Linux, and MinGW on Windows). Release binaries include
+the compiled audio backend. Linux requires PulseAudio or ALSA runtime libraries.
+
+The normal test suite exercises native codecs using generated local audio and a
+paced test output, with no audio device or network required. Install FFmpeg to
+include additional-codec integration tests. See [native playback validation](docs/native-testing.md)
+for race tests, CLI integration, hardware checks, and release targets.
 
 ```bash
 go build .

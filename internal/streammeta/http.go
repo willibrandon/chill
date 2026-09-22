@@ -25,6 +25,19 @@ type Source struct {
 
 // Open requests one live stream with ICY metadata enabled.
 func Open(ctx context.Context, rawURL string, headers map[string]string, onTitle func(string)) (Source, error) {
+	return open(ctx, rawURL, headers, onTitle, false)
+}
+
+// OpenFinite allows validated byte-range seeking for finite, non-ICY responses.
+func OpenFinite(ctx context.Context, rawURL string, headers map[string]string, onTitle func(string)) (Source, error) {
+	return open(ctx, rawURL, headers, onTitle, true)
+}
+
+func open(ctx context.Context, rawURL string, headers map[string]string, onTitle func(string), finite bool) (Source, error) {
+	return openWithIdleTimeout(ctx, rawURL, headers, onTitle, finite, 15*time.Second)
+}
+
+func openWithIdleTimeout(ctx context.Context, rawURL string, headers map[string]string, onTitle func(string), finite bool, idle time.Duration) (Source, error) {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -33,7 +46,7 @@ func Open(ctx context.Context, rawURL string, headers map[string]string, onTitle
 		ResponseHeaderTimeout: 15 * time.Second,
 		IdleConnTimeout:       30 * time.Second,
 	}
-	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	client := &http.Client{Transport: idleTransport{transport, idle}, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
 		}
@@ -48,6 +61,7 @@ func Open(ctx context.Context, rawURL string, headers map[string]string, onTitle
 	}
 	req.Header.Set("User-Agent", "chill/1.0")
 	req.Header.Set("Icy-MetaData", "1")
+	req.Header.Set("Accept-Encoding", "identity")
 	for key, value := range headers {
 		if !strings.ContainsAny(key+value, "\r\n") {
 			req.Header.Set(key, value)
@@ -73,6 +87,8 @@ func Open(ctx context.Context, rawURL string, headers map[string]string, onTitle
 			return Source{}, fmt.Errorf("invalid ICY metadata interval")
 		}
 		body = NewReader(resp.Body, interval, onTitle)
+	} else if finite && !playlist && resp.ContentLength > 0 && resp.Header.Get("Accept-Ranges") == "bytes" && resp.Header.Get("Content-Encoding") == "" {
+		body = newRangeReader(ctx, client, resp)
 	}
 	return Source{Body: body, ContentType: contentType, StationName: clean(resp.Header.Get("icy-name")), Playlist: playlist}, nil
 }

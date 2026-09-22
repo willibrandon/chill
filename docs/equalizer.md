@@ -4,10 +4,10 @@
 
 ## Signal path
 
-Every radio station and podcast uses the same 48 kHz stereo float32 PCM path:
+Every radio station and podcast uses the same stereo float32 PCM path at the configured sample rate:
 
 ```text
-FFmpeg decoder → ten peaking biquads → mpv output
+native/FFmpeg decoder → speed/mono → ten peaking biquads → native output
                                   └→ bounded visualizer tap
 ```
 
@@ -18,7 +18,7 @@ every band is zero. Live changes ramp filter coefficients over 10 ms to avoid di
 The complete target curve is exchanged atomically between the control and audio
 goroutines; only the decoder goroutine owns filter history.
 
-The visualizer consumes the post-EQ samples before mpv volume and mute. This
+The visualizer consumes the post-EQ samples before output volume and mute. This
 makes the displayed spectrum reflect audible tone changes without making its
 level depend on the output volume.
 
@@ -56,5 +56,5 @@ starts, including reconnects and podcast seeks.
 Unit tests cover bypass identity, center-frequency boost and cut, stereo
 isolation, decoder block boundaries, live transitions, concurrent controls,
 strict command validation, persistence migration, daemon replacement, TUI
-layouts, foreground controls, and the real FFmpeg-to-mpv PCM path. The DSP hot
+layouts, foreground controls, and the native and FFmpeg PCM paths. The DSP hot
 path performs no allocations.

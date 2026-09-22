@@ -4,8 +4,10 @@
 
 Live radio has no universal metadata channel, so Chill handles the formats used
 in practice. For direct HTTP audio it asks for ICY metadata and removes metadata
-blocks from the same connection that feeds FFmpeg. This preserves the one-stream
-playback design. Playlist and segmented streams are opened by FFmpeg, and Chill
+blocks from the same connection that feeds the selected decoder. This preserves the one-stream
+playback design. Native decoding also reads codec title and artist tags, including
+Vorbis comments at each song boundary in chained Ogg streams.
+Playlist and segmented streams are opened by FFmpeg, and Chill
 recognizes the title metadata FFmpeg reports. Streams without useful metadata
 continue playing normally.
 
