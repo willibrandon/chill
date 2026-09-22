@@ -119,6 +119,12 @@ chill --help                      # show help
 chill update                      # install the latest release
 ```
 
+`help`, `version`, and `list` also work without `--`. `doctor` checks the tools
+needed by your default station; the built-in YouTube stations need FFmpeg,
+yt-dlp, and a JavaScript runtime. Deno is the default recommendation, and Node
+or QuickJS can also be selected in `tools.json`. Use `doctor --stream <source>`
+to check a particular file, URL, or station instead.
+
 ## Architecture
 
 chill owns audio playback in its background daemon, so music keeps playing when you close the
@@ -337,10 +343,15 @@ shuffle, repeat-one, and repeat-all therefore behave the same for mixed media.
 Saved playlists retain complete media metadata and import or export M3U, M3U8,
 and PLS files.
 
-Local tags supply title, artist, album, genre, embedded artwork, duration, and
-embedded lyrics. Playback progress, favorites, bookmarks, and the latest 200
-items are saved locally. Folder loading is recursive, and consecutive local
-tracks use gapless decoder preloading.
+Local tags supply title, artist, album artist, album, disc and track numbers,
+genre, artwork, duration, and embedded lyrics. Playback progress, favorites,
+bookmarks, and the latest 200 items are saved locally. Folder loading is
+recursive. Albums are grouped by title and album artist (falling back to the
+track artist), then ordered by disc and track. Compilation tags keep different
+performers together. Untagged files use natural filename order.
+Unreadable entries are skipped; explicit file lists and playlists retain their
+order and report unreadable files. Consecutive local tracks use gapless decoder
+preloading.
 
 Press **F7** or run `chill open` for the full-screen browser. See [Library,
 queues, and playlists](docs/library.md) for every command, key, format, and

@@ -82,21 +82,14 @@ func loadMediaInputs(ctx context.Context, inputs []string) ([]MediaItem, error) 
 			return nil, err
 		}
 		if info.IsDir() {
-			err = filepath.WalkDir(path, func(candidate string, entry os.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return walkErr
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if !entry.IsDir() && isAudioPath(candidate) {
-					sources = append(sources, candidate)
-				}
-				return nil
-			})
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			loaded, err := loadMediaFolder(ctx, path)
 			if err != nil {
 				return nil, err
 			}
+			items = append(items, loaded...)
 			continue
 		}
 		if isPlaylistPath(path) {
@@ -122,41 +115,43 @@ func loadMediaInputs(ctx context.Context, inputs []string) ([]MediaItem, error) 
 }
 
 func probeSources(ctx context.Context, sources []string) ([]MediaItem, error) {
-	items := make([]MediaItem, len(sources))
-	sem := make(chan struct{}, 4)
-	var wg sync.WaitGroup
-	var firstErr error
-	var errorMu sync.Mutex
-	for i, source := range sources {
-		i, source := i, source
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			var item MediaItem
-			var err error
-			if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-				item, err = itemFromURL(source)
-			} else {
-				item, err = probeLocalMedia(ctx, source)
-			}
-			if err != nil {
-				errorMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				errorMu.Unlock()
-				return
-			}
-			items[i] = item
-		}()
+	items, failures := probeMediaSources(ctx, sources)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	for _, err := range failures {
+		if err != nil {
+			return nil, err
+		}
 	}
 	return items, nil
+}
+
+// probeMediaSources retains input positions so folders can omit unreadable
+// entries while explicit files and playlists report their source errors.
+func probeMediaSources(ctx context.Context, sources []string) ([]MediaItem, []error) {
+	items := make([]MediaItem, len(sources))
+	failures := make([]error, len(sources))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, source := range sources {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return items, failures
+		}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+				items[i], failures[i] = itemFromURL(source)
+			} else {
+				items[i], failures[i] = probeLocalMedia(ctx, source)
+			}
+		})
+	}
+	wg.Wait()
+	return items, failures
 }
 
 type probeDocument struct {
@@ -217,6 +212,10 @@ func probeLocalMediaExternal(ctx context.Context, path string) (MediaItem, error
 	item.Title = firstNonempty(mediaTag("title"), item.Title)
 	item.Artist = mediaTag("artist", "album_artist")
 	item.Album = mediaTag("album")
+	item.AlbumArtist = mediaTag("album_artist", "albumartist", "album artist")
+	item.Compilation = tagBoolean(mediaTag("compilation", "cpil", "TCMP"))
+	item.DiscNumber = tagNumber(mediaTag("disc", "discnumber"))
+	item.TrackNumber = tagNumber(mediaTag("track", "tracknumber"))
 	item.Genre = mediaTag("genre")
 	item.EmbeddedLyrics = mediaTag("lyrics", "unsyncedlyrics", "syncedlyrics")
 	item.Duration, _ = strconv.ParseFloat(doc.Format.Duration, 64)
@@ -237,6 +236,21 @@ func probeLocalMediaExternal(ctx context.Context, path string) (MediaItem, error
 		}
 	}
 	return item, nil
+}
+
+func tagNumber(value string) int {
+	number, _, _ := strings.Cut(value, "/")
+	n, _ := strconv.Atoi(strings.TrimSpace(number))
+	return max(0, n)
+}
+
+func tagBoolean(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstNonempty(values ...string) string {

@@ -11,6 +11,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func configureDaemonProcess(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP}
+}
+
+func ignoreDaemonHangup() {}
+
 var (
 	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
 	procResumeThread     = kernel32.NewProc("ResumeThread")

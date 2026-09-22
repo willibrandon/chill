@@ -358,6 +358,9 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.generation || !msg.open {
 			return m, nil
 		}
+		if !m.player.currentEvent(msg.event) {
+			return m, waitForegroundPlayer(m.player, m.generation)
+		}
 		if msg.event.handoff != 0 {
 			m.preloadNextLocal()
 			m.player.startHandoff(msg.event.handoff)

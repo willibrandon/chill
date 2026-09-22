@@ -295,6 +295,20 @@ func main() {
 	if flag.NArg() > 0 {
 		args := flag.Args()
 		switch args[0] {
+		case "help", "version", "list":
+			if len(args) != 1 {
+				printResult("", fmt.Errorf("usage: chill %s", args[0]))
+				return
+			}
+			switch args[0] {
+			case "help":
+				printCLIHelp()
+			case "version":
+				fmt.Println("chill " + buildVersion())
+			case "list":
+				printStations()
+			}
+			return
 		case "pause", "resume", "toggle", "stop", "mute":
 			if len(args) != 1 {
 				printResult("", fmt.Errorf("usage: chill %s", args[0]))

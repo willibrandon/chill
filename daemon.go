@@ -554,6 +554,9 @@ func (d *Daemon) startPlayback() error {
 }
 
 func (d *Daemon) playerEvent(e playerEvent) {
+	if p, ok := d.player.(*pcmPlayer); ok && !p.currentEvent(e) {
+		return
+	}
 	defer d.updateMedia()
 	if e.handoff != 0 {
 		d.preloadNextLocal()
@@ -1265,6 +1268,7 @@ func (d *Daemon) listStations() string {
 
 // runDaemon starts the daemon process and blocks forever.
 func runDaemon() {
+	ignoreDaemonHangup()
 	if err := loadUserStations(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 	}

@@ -172,6 +172,9 @@ jobs:
             artifact: windows-assets
     runs-on: ${{ matrix.runner }}
     steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -184,7 +187,7 @@ jobs:
           tar -C "$RUNNER_TEMP/assets" -xzf "$RUNNER_TEMP/assets/$name.tar.gz"
           "$RUNNER_TEMP/assets/$name/chill" --version
           "$RUNNER_TEMP/assets/$name/chill" --help
-          "$RUNNER_TEMP/assets/$name/chill" doctor
+          "$RUNNER_TEMP/assets/$name/chill" doctor --stream testdata/audio/tone.wav
       - name: Run Windows release binary
         if: runner.os == 'Windows'
         shell: pwsh
@@ -196,7 +199,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $binary --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $binary doctor
+          & $binary doctor --stream testdata/audio/tone.wav
           exit $LASTEXITCODE
 
   release:

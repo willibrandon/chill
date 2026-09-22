@@ -6,6 +6,7 @@ import (
 )
 
 type playerEvent struct {
+	decoder    uint64
 	handoff    uint64
 	loaded     bool
 	ended      bool

@@ -126,11 +126,28 @@ func (p *pcmPlayer) emit(e playerEvent) {
 	case <-p.ctx.Done():
 	}
 }
-func (p *pcmPlayer) emitNowPlaying(raw string) {
+func (p *pcmPlayer) currentEvent(e playerEvent) bool {
+	if e.decoder == 0 {
+		return true // Output failures apply to every decoder on this device.
+	}
+	p.decoderMu.Lock()
+	defer p.decoderMu.Unlock()
+	return p.active != nil && p.active.id == e.decoder
+}
+
+func (p *pcmPlayer) emitDecoder(d *preparedDecoder, e playerEvent) {
+	e.decoder = d.id
+	select {
+	case p.event <- e:
+	case <-d.ctx.Done():
+	}
+}
+
+func (p *pcmPlayer) emitNowPlaying(d *preparedDecoder, raw string) {
 	now := streammeta.Parse(raw)
 	select {
-	case p.event <- playerEvent{nowPlaying: &now}:
-	case <-p.ctx.Done():
+	case p.event <- playerEvent{decoder: d.id, nowPlaying: &now}:
+	case <-d.ctx.Done():
 	default:
 	}
 }
@@ -199,9 +216,9 @@ func (p *pcmPlayer) prepare(source string, offset time.Duration, finite bool) *p
 		if err != nil {
 			_, missing := errors.AsType[*requirementsError](err)
 			_, invalidConfig := errors.AsType[*toolConfigError](err)
-			p.emit(playerEvent{err: err.Error(), permanent: missing || invalidConfig})
+			p.emitDecoder(d, playerEvent{err: err.Error(), permanent: missing || invalidConfig})
 		} else {
-			p.emit(playerEvent{ended: true})
+			p.emitDecoder(d, playerEvent{ended: true})
 		}
 	})
 	return d
@@ -236,26 +253,32 @@ func (p *pcmPlayer) startHandoff(active uint64) {
 
 func (p *pcmPlayer) announce(d *preparedDecoder) {
 	d.announced.Do(func() {
-		p.emit(playerEvent{loaded: true})
+		p.emitDecoder(d, playerEvent{loaded: true})
 		d.mu.Lock()
 		title := d.title
 		d.mu.Unlock()
 		if title != "" {
-			p.emitNowPlaying(title)
+			p.emitNowPlaying(d, title)
 		}
 	})
 }
 func (p *pcmPlayer) transition(source string, offset time.Duration, finite bool) bool {
 	p.decoderMu.Lock()
-	defer p.decoderMu.Unlock()
 	d := p.prepared
 	if d == nil || d.source != source || d.offset != offset || d.finite != finite || d.failed() {
+		p.decoderMu.Unlock()
 		return false
+	}
+	// Manual skips may select the preload before the previous decoder reaches
+	// EOF. Cancel its writes and queued PCM before activating the next source.
+	if p.active != nil {
+		p.active.cancel()
 	}
 	p.prepared = nil
 	p.active = d
 	p.offset = offset
 	close(d.selected)
+	p.decoderMu.Unlock()
 	d.start()
 	select {
 	case <-d.ready:
@@ -286,7 +309,7 @@ func (p *pcmPlayer) decode(d *preparedDecoder) error {
 		if active && d.ctx.Err() == nil {
 			select {
 			case <-d.ready:
-				p.emitNowPlaying(title)
+				p.emitNowPlaying(d, title)
 			default:
 			}
 		}
@@ -362,7 +385,7 @@ func (p *pcmPlayer) decode(d *preparedDecoder) error {
 	handoff := p.active == d && p.prepared != nil
 	p.decoderMu.Unlock()
 	if handoff {
-		p.emit(playerEvent{handoff: d.id})
+		p.emitDecoder(d, playerEvent{handoff: d.id})
 	}
 	return p.output.Drain(d.ctx, through)
 }

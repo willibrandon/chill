@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -23,6 +24,13 @@ func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
 	if err != nil {
 		return MediaItem{}, err
 	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return MediaItem{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return MediaItem{}, fmt.Errorf("not a regular audio file: %s", path)
+	}
 	f, err := os.Open(abs)
 	if err != nil {
 		return MediaItem{}, err
@@ -37,6 +45,20 @@ func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
 		item.Title = firstNonempty(metadata.Title(), item.Title)
 		item.Artist = firstNonempty(metadata.Artist(), metadata.AlbumArtist())
 		item.Album = metadata.Album()
+		item.AlbumArtist = cmp.Or(metadata.AlbumArtist(), nativeTagValue(metadata, "albumartist", "album_artist", "album artist"))
+		item.Compilation = tagBoolean(nativeTagValue(metadata, "compilation", "cpil", "TCMP"))
+		if metadata.Format() != audiotag.MP4 {
+			item.DiscNumber, _ = metadata.Disc()
+			item.TrackNumber, _ = metadata.Track()
+		}
+		// Some Vorbis writers store n/total, which the tag reader's numeric
+		// accessors don't parse. Retain the number from the original comment.
+		if item.DiscNumber <= 0 {
+			item.DiscNumber = nativeTagNumber(metadata, "discnumber", "disc")
+		}
+		if item.TrackNumber <= 0 {
+			item.TrackNumber = nativeTagNumber(metadata, "tracknumber", "track")
+		}
 		item.Genre = metadata.Genre()
 		item.EmbeddedLyrics = metadata.Lyrics()
 		if picture := metadata.Picture(); picture != nil && len(picture.Data) > 0 && len(picture.Data) <= 16<<20 {
@@ -57,6 +79,14 @@ func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
 	f.Seek(0, io.SeekStart)
 	var header [512]byte
 	n, _ := f.Read(header[:])
+	if n >= 8 && string(header[4:8]) == "ftyp" {
+		// The pinned tag reader truncates MP4 track/disc fields to eight
+		// bits, including its raw values. Read the original 16-bit fields
+		// even when another atom prevented it from returning metadata.
+		if track, disc, err := readMP4Numbers(f, info.Size()); err == nil {
+			item.TrackNumber, item.DiscNumber = track, disc
+		}
+	}
 	kind := playback.Format(header[:n])
 	f.Seek(0, io.SeekStart)
 	if kind == "wav" {
@@ -83,11 +113,48 @@ func probeLocalMedia(ctx context.Context, path string) (MediaItem, error) {
 	}
 	item.Artist = firstNonempty(item.Artist, external.Artist)
 	item.Album = firstNonempty(item.Album, external.Album)
+	item.AlbumArtist = cmp.Or(item.AlbumArtist, external.AlbumArtist)
+	item.Compilation = item.Compilation || external.Compilation
+	if item.DiscNumber == 0 {
+		item.DiscNumber = external.DiscNumber
+	}
+	if item.TrackNumber == 0 {
+		item.TrackNumber = external.TrackNumber
+	}
 	item.Genre = firstNonempty(item.Genre, external.Genre)
 	item.Artwork = firstNonempty(item.Artwork, external.Artwork)
 	item.EmbeddedLyrics = firstNonempty(item.EmbeddedLyrics, external.EmbeddedLyrics)
 	item.Duration = external.Duration
 	return item, ctx.Err()
+}
+
+func nativeTagValue(metadata audiotag.Metadata, names ...string) string {
+	for _, name := range names {
+		for key, value := range metadata.Raw() {
+			if strings.EqualFold(key, name) {
+				return fmt.Sprint(value)
+			}
+			if strings.HasPrefix(key, "TXX") {
+				if text, ok := value.(*audiotag.Comm); ok && text != nil && strings.EqualFold(text.Description, name) {
+					return strings.TrimRight(text.Text, "\x00")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func nativeTagNumber(metadata audiotag.Metadata, names ...string) int {
+	for _, name := range names {
+		for key, value := range metadata.Raw() {
+			if strings.EqualFold(key, name) {
+				if n := tagNumber(fmt.Sprint(value)); n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func readMediaTags(source io.ReadSeeker) (metadata audiotag.Metadata, err error) {
@@ -150,6 +217,8 @@ func readWAVMetadata(f *os.File, item *MediaItem) {
 						item.Artist = value
 					case "IPRD":
 						item.Album = value
+					case "ITRK", "IPRT":
+						item.TrackNumber = tagNumber(value)
 					case "IGNR":
 						item.Genre = value
 					case "ILYR":

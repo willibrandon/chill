@@ -11,12 +11,16 @@ import (
 )
 
 func sourceNeedsYtdl(source string) bool {
+	return sourceHasDomain(source, "youtube.com", "youtu.be", "soundcloud.com", "mixcloud.com", "bandcamp.com", "bilibili.com")
+}
+
+func sourceHasDomain(source string, domains ...string) bool {
 	u, err := url.Parse(source)
 	if err != nil {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, domain := range []string{"youtube.com", "youtu.be", "soundcloud.com", "mixcloud.com", "bandcamp.com", "bilibili.com"} {
+	for _, domain := range domains {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			return true
 		}
@@ -120,11 +124,18 @@ func checkMediaRequirements(items []MediaItem) error {
 			missing = append(missing, name)
 		}
 	}
+	_, runtimePath, err := selectedJSRuntime()
+	if err != nil {
+		return err
+	}
+	youtube := sourceHasDomain(item.Source, "youtube.com", "youtu.be") || item.Kind == MediaProvider && slices.Contains([]string{"youtube", "ytmusic"}, item.Provider)
+	if youtube && runtimePath == "" {
+		missing = append(missing, "deno")
+	}
 	if len(missing) > 0 {
 		return &requirementsError{missing}
 	}
-	_, _, err := selectedJSRuntime()
-	return err
+	return nil
 }
 
 // findYtdl retains its argument for portable-install compatibility.
