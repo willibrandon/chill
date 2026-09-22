@@ -88,6 +88,8 @@ jobs:
       - name: Build against glibc 2.31
         shell: bash
         run: |
+          # Checkout's temporary Git config does not cover later container steps.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           out="$RUNNER_TEMP/out"
           name=chill_${TAG#v}_linux_${{ matrix.arch }}
           mkdir -p "$out/$name"
