@@ -9,7 +9,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -44,7 +46,7 @@ def main():
     baseline = player_pids()
 
     # A short runtime path also leaves room for macOS's Unix socket limit.
-    with tempfile.TemporaryDirectory(prefix="c-", dir=os.environ.get("RUNNER_TEMP")) as root:
+    with tempfile.TemporaryDirectory(prefix="c-", dir=None if os.name == "nt" else "/tmp") as root:
         root = Path(root)
         env = dict(os.environ, HOME=str(root), USERPROFILE=str(root),
                    XDG_CONFIG_HOME=str(root / "config"), APPDATA=str(root / "config"),
@@ -92,6 +94,9 @@ def main():
             # Exercise the real help entry points with playback dependencies
             # unavailable, so help remains usable before installation/setup.
             for arguments, expected in [
+                (("help",), ("Commands:", "doctor")),
+                (("version",), ("chill ",)),
+                (("list",), ("lofi-girl",)),
                 (("--help",), ("Commands:", "doctor", "add <name>", "remove <name>",
                                "default <name>", "upgrade", "--status --json", "--stations")),
                 (("-h",), ("Commands:", "doctor", "--status --json")),
@@ -105,16 +110,20 @@ def main():
                 help_text = help_result.stdout + help_result.stderr
                 require(help_result.returncode == 0 and all(word in help_text for word in expected),
                         f"Incomplete help for {arguments}: {help_text}")
+            unknown = subprocess.run([str(binary), "hlep"], env=env, capture_output=True,
+                                     text=True, timeout=15)
+            require(unknown.returncode != 0 and "unknown station: hlep" in unknown.stderr,
+                    f"Unknown command was not rejected: {unknown.stderr}")
             stopped = json.loads(run("--status", "--json"))
             require(not stopped["running"] and stopped["state"] == "stopped",
                     f"Unexpected status before startup: {stopped}")
-            doctor = run("doctor")
-            require("no daemon running" in doctor, "Doctor did not report the stopped daemon")
             remote_stopped = json.loads(run("remote", "state"))
             require(remote_stopped["snapshot"]["playback"]["state"] == "stopped",
                     f"Offline remote state was not available: {remote_stopped}")
             run("add", "ci-audio", args.youtube or str(audio), "CI playback")
             run("default", "ci-audio")
+            doctor = run("doctor")
+            require("no daemon running" in doctor, "Doctor did not report the stopped daemon")
             # A nonempty directory blocks both Unix sockets and the Windows
             # named-pipe marker, forcing a real child-daemon startup failure.
             blocked = (root / "config" / "chill" / "daemon.pipe" if os.name == "nt"
@@ -148,6 +157,41 @@ def main():
                 '{"profile":"Automatic"}', "--wait")
             run("--stop")
             wait_for("not running")
+            if os.name != "nt" and not args.youtube:
+                import pty
+
+                # Give the launcher a controlling terminal, then close its
+                # master while the command prompt is idle. Keep paths short
+                # enough for Darwin's Unix-domain socket limit.
+                terminal_pid, terminal = pty.fork()
+                if terminal_pid == 0:
+                    launcher = ("import subprocess, sys, time; "
+                                "subprocess.run([sys.argv[1], 'play', sys.argv[2]], check=True); "
+                                "time.sleep(60)")
+                    os.execve(sys.executable, [sys.executable, "-c", launcher, str(binary), str(audio)], env)
+                try:
+                    wait_for("playing")
+                    before = json.loads(run("--status", "--json"))
+                    os.close(terminal)
+                    terminal = None
+                    deadline = time.monotonic() + 5
+                    while os.waitpid(terminal_pid, os.WNOHANG)[0] == 0:
+                        require(time.monotonic() < deadline, "Terminal launcher survived hangup")
+                        time.sleep(0.05)
+                    terminal_pid = None
+                    time.sleep(0.25)
+                    after = json.loads(run("--status", "--json"))
+                    require(after["state"] == "playing" and after["position"] > before["position"],
+                            f"Playback stopped after terminal close: {after}")
+                    print("Playback continued after closing its terminal", flush=True)
+                finally:
+                    if terminal is not None:
+                        os.close(terminal)
+                    if terminal_pid is not None:
+                        os.kill(terminal_pid, signal.SIGKILL)
+                        os.waitpid(terminal_pid, 0)
+                    run("--stop")
+                    wait_for("not running")
             if args.legacy_bin_dir:
                 legacy = args.legacy_bin_dir / ("chill.exe" if os.name == "nt" else "chill")
                 # Leave an actual old daemon running, then issue an ordinary

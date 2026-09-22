@@ -24,8 +24,17 @@ chill album.m3u8 --fg
 chill open
 ```
 
-Folders are scanned recursively in path order. Supported extensions are AAC,
-AIFF, ALAC, FLAC, M4A, MP3, MP4, OGA, OGG, Opus, WAV, WebM, and WMA. Built-in
+Folders are scanned recursively, keeping subfolders together in natural path
+order, with exact path spelling breaking ties such as Disc 1 and Disc 01.
+Within each folder, albums are grouped by title and album artist, falling back
+to the track artist when no album artist is tagged. Compilation tags keep
+different performers together without an album artist. Each album is ordered
+by disc and track; untagged files use natural filename order (track 2 before
+track 10). Unreadable entries are skipped, and a folder with no readable audio
+returns an error.
+Explicit file lists and playlists keep their supplied order and report source
+errors. Supported extensions are AAC, AIFF, ALAC, FLAC, M4A, MP3, MP4, OGA,
+OGG, Opus, WAV, WebM, and WMA. Built-in
 readers extract tags, duration, lyrics, and artwork for native formats; ffprobe
 provides additional metadata when installed. Missing metadata does not prevent
 a track from appearing in the library. Additional codecs require FFmpeg when

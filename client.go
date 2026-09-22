@@ -130,6 +130,7 @@ func startDaemon() error {
 		return err
 	}
 	cmd := exec.Command(exe, "--daemon")
+	configureDaemonProcess(cmd)
 	log, err := openDaemonLog()
 	if err != nil {
 		return fmt.Errorf("opening daemon log: %w", err)
@@ -169,10 +170,11 @@ func clientPlay(station string) (string, error) {
 	if station == "" {
 		selected = findStation(defaultStation())
 	}
-	if selected != nil {
-		if err := checkMediaRequirements([]MediaItem{itemFromStation(*selected)}); err != nil {
-			return "", err
-		}
+	if selected == nil {
+		return "", fmt.Errorf("unknown station: %s", firstNonempty(station, defaultStation()))
+	}
+	if err := checkMediaRequirements([]MediaItem{itemFromStation(*selected)}); err != nil {
+		return "", err
 	}
 	if err := ensureDaemon(); err != nil {
 		return "", err

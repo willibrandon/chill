@@ -18,6 +18,7 @@ import (
 // TestTUIDoctorReportsFailedChecks checks diagnostic failures remain visible in the transcript.
 func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 	withConfigDir(t)
+	useTestAudio(t)
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("MPV_HOME", t.TempDir())
 	model := newTUI()
@@ -38,14 +39,14 @@ func TestTUIDoctorReportsFailedChecks(t *testing.T) {
 		msg := task.next()
 		model.update(msg)
 		if result, ok := msg.(resultMsg); ok {
-			if result.err != nil || result.out != "" {
-				t.Fatalf("findings should stream without a final error: %+v", result)
+			if result.err == nil || result.out != "" {
+				t.Fatalf("failed checks should stream with a final error: %+v", result)
 			}
 			break
 		}
 	}
 	transcript := ansi.Strip(strings.Join(transcriptLines(model), "\n"))
-	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[WARN] ffprobe", "[WARN] chill links", "no daemon running", "failed: 0."} {
+	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[WARN] ffprobe", "[WARN] chill links", "[FAIL] default station lofi-girl", "no daemon running", "failed: 1."} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q: %s", want, transcript)
 		}

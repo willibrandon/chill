@@ -5,9 +5,17 @@ package main
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"sync"
 	"syscall"
 )
+
+// configureDaemonProcess separates background playback from the caller's terminal.
+func configureDaemonProcess(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
+
+func ignoreDaemonHangup() { signal.Ignore(syscall.SIGHUP) }
 
 // processTree owns an external helper's process group and all descendants.
 type processTree struct {

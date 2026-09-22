@@ -178,6 +178,13 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 		r.check("FAIL", "config", err.Error()+"; fix stations.json, then rerun doctor")
 	} else {
 		r.check("OK", "config", fmt.Sprintf("%s (%d stations, default %s; missing file uses built-ins)", configPath(), len(stationSnapshot()), defaultStation()))
+		if station := findStation(defaultStation()); station != nil && !options.stations && options.stream == "" {
+			if err := checkMediaRequirements([]MediaItem{itemFromStation(*station)}); err != nil {
+				r.check("FAIL", "default station "+station.Name, doctorSourceError(err))
+			} else {
+				r.check("OK", "default station "+station.Name, "required tools available; check playback with chill doctor --stream "+station.Name)
+			}
+		}
 	}
 
 	if library, err := loadPodcastLibrary(); err != nil {
@@ -254,7 +261,7 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 			return ctx.Err()
 		}
 		if err != nil {
-			r.check("FAIL", station.Name, err.Error())
+			r.check("FAIL", station.Name, doctorSourceError(err))
 			continue
 		}
 		r.check("OK", station.Name, info.Title+"; initial audio decoded successfully")
@@ -267,6 +274,14 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("doctor found problems; see the checks above")
 	}
 	return nil
+}
+
+func doctorSourceError(err error) string {
+	message := err.Error()
+	if missing, ok := errors.AsType[*requirementsError](err); ok {
+		message += "; install with `" + strings.Join(installCommands(missing.missing), "` then `") + "`"
+	}
+	return message
 }
 
 func (r *doctorReport) program(ctx context.Context, name, path string) {
@@ -362,6 +377,12 @@ type streamInfo struct {
 func probeStreamContext(ctx context.Context, _ string, source string, timeout time.Duration) (streamInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return streamInfo{}, err
+	}
+	if err := checkMediaRequirements([]MediaItem{{Source: source}}); err != nil {
+		return streamInfo{}, err
+	}
 	settings, err := loadPlaybackSettings()
 	if err != nil {
 		return streamInfo{}, err

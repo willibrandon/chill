@@ -257,7 +257,11 @@ func TestNativeHTTPUsesOneConnection(t *testing.T) {
 // TestDoctorCapabilitiesAndExplicitSources verifies optional warnings, actual
 // decoding, and explicit device failures without opening physical hardware.
 func TestDoctorCapabilitiesAndExplicitSources(t *testing.T) {
-	withConfigDir(t)
+	path := withConfigDir(t)
+	writeConfig(t, path, `{"stations":[{"name":"local","url":"testdata/audio/tone.flac"}],"default_station":"local"}`)
+	if err := loadUserStations(); err != nil {
+		t.Fatal(err)
+	}
 	useTestAudio(t)
 	t.Setenv("PATH", t.TempDir())
 	for _, args := range [][]string{nil, {"--stream", "testdata/audio/tone.flac"}, {"--audio"}} {

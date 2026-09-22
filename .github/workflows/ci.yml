@@ -112,7 +112,7 @@ jobs:
         run: |
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=chill_test
-          ./chill doctor --audio
+          ./chill doctor --audio --stream testdata/audio/tone.wav
 
       - name: Verify playback, controls, and cleanup
         env:

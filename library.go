@@ -42,6 +42,10 @@ type MediaItem struct {
 	Title          string            `json:"title"`                     // Title is the primary display label.
 	Artist         string            `json:"artist,omitempty"`          // Artist names the performer or publisher.
 	Album          string            `json:"album,omitempty"`           // Album groups finite tracks.
+	AlbumArtist    string            `json:"album_artist,omitempty"`    // AlbumArtist identifies the album independently of track performers.
+	Compilation    bool              `json:"compilation,omitzero"`      // Compilation groups tracks by different performers into one album.
+	DiscNumber     int               `json:"disc_number,omitempty"`     // DiscNumber orders discs within an album.
+	TrackNumber    int               `json:"track_number,omitempty"`    // TrackNumber orders tracks within a disc.
 	Genre          string            `json:"genre,omitempty"`           // Genre carries optional source metadata.
 	Artwork        string            `json:"artwork,omitempty"`         // Artwork is a local path or remote URL.
 	EmbeddedLyrics string            `json:"embedded_lyrics,omitempty"` // EmbeddedLyrics retains file-tag lyrics.
