@@ -188,7 +188,7 @@ func (t *tui) equalizerFaders(height int) []string {
 			}
 			style := styleDim
 			if band == t.eq.cursor {
-				style = styleSelected
+				style = styleCommand
 			}
 			line += equalizerCell(glyph, width, style)
 		}
@@ -198,7 +198,7 @@ func (t *tui) equalizerFaders(height int) []string {
 	for i, label := range equalizerBandLabels {
 		style := styleDim
 		if i == t.eq.cursor {
-			style = styleSelected
+			style = styleSelection
 		}
 		labels += equalizerCell(label, width, style)
 		gains += equalizerCell(formatEqualizerGain(bands[i]), width, style)
@@ -214,7 +214,7 @@ func (t *tui) equalizerList(height int) []string {
 	for i := first; i < last; i++ {
 		marker, style := "  ", styleDim
 		if i == t.eq.cursor {
-			marker, style = "❯ ", styleSelected
+			marker, style = "❯ ", styleSelection
 		}
 		barWidth := max(1, t.width-24)
 		zero := barWidth / 2
@@ -246,7 +246,7 @@ func (t *tui) equalizerView() tea.View {
 	if t.eq.note != "" {
 		state = "error: " + t.eq.note
 	}
-	heading := styleHeading.Render("equalizer") + styleDim.Render("  preset ") + styleSelected.Render("["+t.eq.config.Preset+"]") + styleDim.Render("  "+state)
+	heading := styleHeading.Render("equalizer") + styleDim.Render("  preset ") + styleCommand.Render("["+t.eq.config.Preset+"]") + styleDim.Render("  "+state)
 	heading = ansi.Truncate(heading, t.width, "")
 	if t.height == 1 {
 		view.SetContent(heading)

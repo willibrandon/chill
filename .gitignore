@@ -1,6 +1,7 @@
 # Application binaries
 chill
 chill.exe
+/vhs/fixtures/showcase.m4a
 
 # macOS metadata
 .DS_Store

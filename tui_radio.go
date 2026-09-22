@@ -694,11 +694,7 @@ func (t *tui) radioView() tea.View {
 	for row := 0; row < room && first+row < len(rows); row++ {
 		index := first + row
 		text := r.rowText(rows[index])
-		style, prefix := styleInput, "   "
-		if index == r.page.selected {
-			style, prefix = styleSelected, " ❯ "
-		}
-		lines[row+2] = style.Render(fit(prefix + text))
+		lines[row+2] = renderBrowserRow(text, width, index == r.page.selected)
 	}
 	if room > 0 && len(rows) == 0 && !r.loading {
 		lines[2] = styleDim.Render("  No results. " + t.presentation.bindingLabel("radio.global-search") + " searches stations.")

@@ -1,5 +1,7 @@
 # Providers and search
 
+![Browsing configured music providers](../assets/providers.png)
+
 Provider items keep a stable provider key and catalog id independently of a
 temporary stream URL. That identity survives queues, playlists, favorites,
 bookmarks, history, daemon restarts, and stream re-resolution.

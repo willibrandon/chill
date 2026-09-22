@@ -24,6 +24,27 @@ func TestBuiltInInterfaceThemesMeetContrastRules(t *testing.T) {
 	}
 }
 
+// TestSelectableRowsUseThemeSelection checks every palette applies its
+// contrast-tested selection pair and keeps ordinary labels visually distinct.
+func TestSelectableRowsUseThemeSelection(t *testing.T) {
+	t.Cleanup(func() { applyInterfaceTheme(builtinInterfaceThemes[0], defaultInterfaceSettings()) })
+	for _, theme := range builtinInterfaceThemes {
+		t.Run(theme.Name, func(t *testing.T) {
+			settings := defaultInterfaceSettings()
+			settings.ColorMode = "truecolor"
+			applyInterfaceTheme(theme, settings)
+			selected := renderBrowserRow("Profile  Automatic", 80, true)
+			if want := styleSelection.Render(" ❯ Profile  Automatic"); selected != want {
+				t.Fatalf("selected row did not use the theme selection style: %q", selected)
+			}
+			ordinary := renderBrowserRow("Profile  Automatic", 80, false)
+			if plain := ansi.Strip(ordinary); plain != "   Profile  Automatic" || ordinary == plain {
+				t.Fatalf("ordinary row lost its semantic styling: %q", ordinary)
+			}
+		})
+	}
+}
+
 // TestInterfaceSettingsPersistAndPreserveDefaults checks atomic durable settings.
 func TestInterfaceSettingsPersistAndPreserveDefaults(t *testing.T) {
 	withConfigDir(t)
