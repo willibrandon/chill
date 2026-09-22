@@ -1,7 +1,6 @@
 # Capture the F4 equalizer, F5 radio browser, and F6 lyrics view.
 # The fixture supplies quiet local media with deterministic metadata and lyrics.
 
-Require mpv
 Require ffmpeg
 Require ffprobe
 Require go

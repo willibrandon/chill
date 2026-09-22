@@ -43,7 +43,9 @@ class PackageUpdateTests(unittest.TestCase):
         update_package("v0.6.0", self.checksums, self.formula, "homebrew")
         formula = self.formula.read_text(encoding="utf-8")
         self.assertIn('version "0.6.0"', formula)
-        self.assertIn('depends_on "mpv"', formula)
+        self.assertNotIn('depends_on "mpv"', formula)
+        self.assertIn('depends_on "yt-dlp"', formula)
+        self.assertIn('depends_on "deno"', formula)
         self.assertIn('depends_on "ffmpeg"', formula)
         for target in TARGETS:
             if not target.startswith("windows_"):
@@ -52,7 +54,7 @@ class PackageUpdateTests(unittest.TestCase):
         update_package("v0.6.0", self.checksums, self.manifest, "scoop")
         manifest = json.loads(self.manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.6.0")
-        self.assertEqual(manifest["depends"], ["extras/mpv", "main/yt-dlp", "main/deno", "main/ffmpeg"])
+        self.assertEqual(manifest["depends"], ["main/yt-dlp", "main/deno", "main/ffmpeg"])
         self.assertEqual(manifest["bin"], "chill.exe")
         self.assertEqual(manifest["autoupdate"], {"hash": {"url": "$baseurl/checksums.txt"}})
         for arch, target in {"64bit": "windows_amd64", "arm64": "windows_arm64"}.items():
@@ -114,6 +116,17 @@ class PackageUpdateTests(unittest.TestCase):
     def test_accepts_binary_checksum_format(self):
         text = self.checksums.read_text(encoding="utf-8").replace("  chill", " *chill")
         self.assertEqual(release_checksums(text, "0.6.0"), self.hashes)
+
+    def test_unrelated_dependencies_survive_migration(self):
+        self.formula.write_text(self.formula.read_text().replace('  depends_on "mpv"',
+                                '  depends_on "openssl@3"\n  depends_on "mpv"'), encoding="utf-8")
+        manifest = json.loads(self.manifest.read_text())
+        manifest["depends"].append("main/git")
+        self.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        update_package("v0.6.0", self.checksums, self.formula, "homebrew")
+        update_package("v0.6.0", self.checksums, self.manifest, "scoop")
+        self.assertIn('depends_on "openssl@3"', self.formula.read_text())
+        self.assertIn("main/git", json.loads(self.manifest.read_text())["depends"])
 
 
 if __name__ == "__main__":

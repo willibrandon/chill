@@ -36,10 +36,11 @@ def player_pids():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", type=Path, help="built Chill executable to exercise")
     parser.add_argument("--youtube", metavar="URL", help="test a live YouTube stream instead of local audio")
     parser.add_argument("--legacy-bin-dir", type=Path, help="directory containing v0.3.2 for upgrade testing")
     args = parser.parse_args()
-    binary = Path("chill.exe" if os.name == "nt" else "chill").resolve()
+    binary = (args.binary or Path("chill.exe" if os.name == "nt" else "chill")).resolve()
     baseline = player_pids()
 
     # A short runtime path also leaves room for macOS's Unix socket limit.
@@ -47,15 +48,16 @@ def main():
         root = Path(root)
         env = dict(os.environ, HOME=str(root), USERPROFILE=str(root),
                    XDG_CONFIG_HOME=str(root / "config"), APPDATA=str(root / "config"),
-                   TMPDIR=str(root), TMP=str(root), TEMP=str(root), MPV_HOME=str(root))
-        (root / "mpv.conf").write_text("ao=null\nloop-file=inf\n", encoding="utf-8")
+                   TMPDIR=str(root), TMP=str(root), TEMP=str(root), CHILL_TEST_AUDIO="null")
+        if args.legacy_bin_dir:
+            env["MPV_HOME"] = str(root)
+            (root / "mpv.conf").write_text("ao=null\nloop-file=inf\n", encoding="utf-8")
         audio = root / "silence.wav"
         with wave.open(str(audio), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
             wav.setframerate(8000)
-            # The PCM decoder owns media EOF; mpv's loop-file setting only
-            # applies to the legacy backend. Keep the fixture alive throughout.
+            # Keep the fixture alive throughout the controls and upgrade checks.
             wav.writeframes(bytes(8000 * 2 * 180))
 
         def run(*command, executable=binary):
@@ -111,6 +113,8 @@ def main():
             remote_stopped = json.loads(run("remote", "state"))
             require(remote_stopped["snapshot"]["playback"]["state"] == "stopped",
                     f"Offline remote state was not available: {remote_stopped}")
+            run("add", "ci-audio", args.youtube or str(audio), "CI playback")
+            run("default", "ci-audio")
             # A nonempty directory blocks both Unix sockets and the Windows
             # named-pipe marker, forcing a real child-daemon startup failure.
             blocked = (root / "config" / "chill" / "daemon.pipe" if os.name == "nt"
@@ -144,16 +148,15 @@ def main():
                 '{"profile":"Automatic"}', "--wait")
             run("--stop")
             wait_for("not running")
-            run("add", "ci-audio", args.youtube or str(audio), "CI playback")
-            run("default", "ci-audio")
             if args.legacy_bin_dir:
-                legacy = args.legacy_bin_dir / binary.name
+                legacy = args.legacy_bin_dir / ("chill.exe" if os.name == "nt" else "chill")
                 # Leave an actual old daemon running, then issue an ordinary
                 # volume command using the new executable, without --stop.
                 run("ci-audio", executable=legacy)
                 run("--vol", "55", executable=legacy)
                 run("--toggle", executable=legacy)
                 old_players = player_pids() - baseline
+                require(old_players, "Legacy backend did not start")
                 inspected = json.loads(run("--status", "--json"))
                 require(inspected["compatibility"] == "daemon-outdated",
                         f"Legacy daemon was not identified: {inspected}")
@@ -165,7 +168,7 @@ def main():
                 require("ci-audio" in status and "vol 90" in status,
                         f"Upgrade lost station, pause, or volume: {status}")
                 upgraded_players = player_pids() - baseline
-                require(upgraded_players and not (old_players & upgraded_players),
+                require(not (old_players & upgraded_players),
                         "Outdated player was not replaced")
                 run("--vol", "60")
                 require(player_pids() - baseline == upgraded_players,
@@ -176,7 +179,7 @@ def main():
                 print("v0.3.2 daemon upgraded automatically; subsequent volume changes kept the same player", flush=True)
             print(run("--toggle"), flush=True)
             wait_for("playing", timeout=190 if args.youtube else 10)
-            # Catch failures that occur just after mpv's file-loaded event.
+            # Catch failures that occur just after initial audio becomes available.
             time.sleep(0.5)
             require(run("--status").startswith("playing │"), "Playback did not stay playing")
             run("--toggle")

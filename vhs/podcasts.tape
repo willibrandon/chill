@@ -1,6 +1,5 @@
 # Browses a public feed, plays briefly, and stops the isolated session.
 Require go
-Require mpv
 Require ffmpeg
 Require ffprobe
 Set FontSize 14

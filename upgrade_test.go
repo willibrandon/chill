@@ -73,7 +73,7 @@ func TestRestoreKeepsPauseMuteAndSleepDeadline(t *testing.T) {
 	d.newPlayer = func(volume int, muted, paused bool) (player, error) {
 		starts++
 		if volume != 31 || !muted || !paused {
-			t.Errorf("mpv started with volume=%d muted=%v paused=%v", volume, muted, paused)
+			t.Errorf("player started with volume=%d muted=%v paused=%v", volume, muted, paused)
 		}
 		restoredPlayer = &fakePlayer{event: make(chan playerEvent, 8)}
 		return restoredPlayer, nil

@@ -1,4 +1,4 @@
-// daemon.go implements the background daemon that manages mpv playback.
+// daemon.go implements the background daemon that manages native audio playback.
 // The daemon listens on a Unix socket and accepts commands from clients.
 
 package main
@@ -34,13 +34,13 @@ const daemonFrameLimit = 16 << 20
 
 const daemonProtocol = 7
 
-// Daemon manages the mpv subprocess and handles client commands.
+// Daemon manages the audio engine and handles client commands.
 // It maintains playback state and communicates over a Unix socket.
 type Daemon struct {
 	resolveCancel                  context.CancelFunc
 	mu                             sync.Mutex // protects all fields
 	player                         player
-	newPlayer                      func(int, bool, bool) (player, error) // nil uses mpv
+	newPlayer                      func(int, bool, bool) (player, error) // nil uses native audio
 	newAudioPlayer                 func(int, bool, bool, time.Duration, bool, AudioSettings) (player, error)
 	watchDone                      chan struct{}
 	station                        *Station // currently playing station
@@ -68,7 +68,7 @@ type Daemon struct {
 	notifiedGeneration             uint64
 	paused                         bool // whether playback is paused
 	muted                          bool
-	volume                         int    // 0-100, applied to mpv whenever it changes
+	volume                         int    // 0-100, applied to output whenever it changes
 	eqPreset                       string // built-in preset name or Custom
 	eqCustom                       audio.EqualizerBands
 	state                          string // idle, loading, reconnecting, playing, paused, failed
@@ -141,7 +141,7 @@ type Status struct {
 	Desc   string `json:"desc,omitempty"`   // station description
 	Uptime string `json:"uptime,omitempty"` // how long current station has been playing
 	Volume int    `json:"volume"`           // 0-100
-	// Muted reports whether mpv output is silenced.
+	// Muted reports whether audio output is silenced.
 	Muted bool `json:"muted"`
 	// EQPreset is the active built-in preset name or Custom.
 	EQPreset string `json:"eq_preset"`
@@ -495,7 +495,7 @@ func (d *Daemon) startPlayback() error {
 	d.player = p
 	p.setEqualizer(d.equalizer().activeBands())
 	if d.current != nil && d.current.finite() && d.playbackSpeed() != 1 {
-		if err := p.command("set_property", "speed", d.playbackSpeed()); err != nil {
+		if err := p.setSpeed(d.playbackSpeed()); err != nil {
 			p.close()
 			d.player = nil
 			return err
@@ -508,7 +508,7 @@ func (d *Daemon) startPlayback() error {
 			select {
 			case e, open := <-p.events():
 				if !open {
-					e = playerEvent{err: "mpv event stream closed"}
+					e = playerEvent{err: "audio event stream closed"}
 				}
 				d.mu.Lock()
 				if d.player == p {
@@ -538,7 +538,7 @@ func (d *Daemon) startPlayback() error {
 	} else {
 		source = d.station.URL
 	}
-	if err := p.command("loadfile", source, "replace"); err != nil {
+	if err := p.load(source); err != nil {
 		d.closePlayer()
 		return err
 	}
@@ -555,6 +555,13 @@ func (d *Daemon) startPlayback() error {
 
 func (d *Daemon) playerEvent(e playerEvent) {
 	defer d.updateMedia()
+	if e.handoff != 0 {
+		d.preloadNextLocal()
+		if p, ok := d.player.(*pcmPlayer); ok {
+			p.startHandoff(e.handoff)
+		}
+		return
+	}
 	if e.nowPlaying != nil && d.station != nil {
 		if e.nowPlaying.Raw == "" {
 			d.nowPlaying = nil
@@ -572,6 +579,12 @@ func (d *Daemon) playerEvent(e playerEvent) {
 		return
 	}
 	if e.err != "" {
+		if e.permanent {
+			d.closePlayer()
+			d.state = "failed"
+			d.lastError = e.err
+			return
+		}
 		if e.output && d.fallbackFromAudioOutput(e.err) {
 			return
 		}
@@ -747,7 +760,7 @@ func (d *Daemon) pause() string {
 		return ok("paused")
 	}
 	if d.player != nil {
-		if err := d.player.command("set_property", "pause", true); err != nil {
+		if err := d.player.setPaused(true); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -771,7 +784,7 @@ func (d *Daemon) resume() string {
 		return fail("nothing playing")
 	}
 	if d.player != nil {
-		if err := d.player.command("set_property", "pause", false); err != nil {
+		if err := d.player.setPaused(false); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -838,7 +851,7 @@ func (d *Daemon) volumeCmd(arg string) string {
 func (d *Daemon) setVolume(n int) string {
 	n = max(0, min(100, n))
 	if d.player != nil {
-		if err := d.player.command("set_property", "volume", n); err != nil {
+		if err := d.player.setVolume(n); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -952,7 +965,7 @@ func (d *Daemon) equalizerStateCmd(arg string) string {
 // mute silences playback without losing the level it returns to.
 func (d *Daemon) mute() string {
 	if d.player != nil {
-		if err := d.player.command("set_property", "mute", !d.muted); err != nil {
+		if err := d.player.setMuted(!d.muted); err != nil {
 			return fail(err.Error())
 		}
 	}
@@ -1024,7 +1037,7 @@ func (d *Daemon) mediaState() media.State {
 	} else if d.paused || d.state == "paused" {
 		status = media.StatusPaused
 	}
-	audio := d.audio.status(d.activeAudioDevice)
+	audio := activeAudioStatus(d.audio, d.activeAudioDevice, d.player)
 	state := media.State{
 		Status: status, Volume: float64(d.volume) / 100,
 		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
@@ -1197,7 +1210,7 @@ func (d *Daemon) status() string {
 		Muted:         d.muted,
 		EQPreset:      d.equalizer().Preset,
 		EQBands:       d.equalizer().activeBands(),
-		Audio:         d.audio.status(d.activeAudioDevice),
+		Audio:         activeAudioStatus(d.audio, d.activeAudioDevice, d.player),
 		Notifications: d.notifications,
 		State:         d.state,
 		Error:         d.lastError,

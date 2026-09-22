@@ -1,12 +1,10 @@
-// requirements.go checks that the programs chill plays through are installed.
+// requirements.go checks the optional tools needed by a selected source.
 
 package main
 
 import (
+	"errors"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -45,9 +43,9 @@ func (e *requirementsError) chill() string {
 	}
 
 	lines := []string{
-		palette.purple + "  ~ no sound system yet ~" + palette.reset,
+		palette.purple + "  ~ this source needs an extra tool ~" + palette.reset,
 		"",
-		palette.dim + "  chill uses mpv, FFmpeg and yt-dlp, and couldn't find " + strings.Join(e.missing, " or ") + "." + palette.reset,
+		palette.dim + "  chill couldn't find " + strings.Join(e.missing, " or ") + "." + palette.reset,
 		palette.dim + "  no rush. grab " + them + " and come back, the beats will wait:" + palette.reset,
 		"",
 	}
@@ -85,103 +83,49 @@ func installCommands(programs []string) []string {
 	for _, p := range programs {
 		if p == "yt-dlp" {
 			apt = append(apt, "pipx")
-			cmds = append(cmds, "pipx install yt-dlp")
+			cmds = append(cmds, "pipx install 'yt-dlp[default]'")
+		} else if p == "deno" {
+			cmds = append(cmds, "curl -fsSL https://deno.land/install.sh | sh")
 		} else {
 			apt = append(apt, p)
 		}
 	}
-	return append([]string{"sudo apt install " + strings.Join(apt, " ")}, cmds...)
+	if len(apt) > 0 {
+		cmds = append([]string{"sudo apt install " + strings.Join(apt, " ")}, cmds...)
+	}
+	return cmds
 }
 
-func checkPodcastRequirements() error {
-	var missing []string
-	for _, name := range []string{"mpv", "ffmpeg", "ffprobe"} {
-		if _, err := exec.LookPath(name); err != nil {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		return &requirementsError{missing}
-	}
-	return nil
-}
-
-// checkLocalMediaRequirements returns the programs needed while discovering
-// local tracks. Playback checks mpv separately when it starts.
-func checkLocalMediaRequirements() error {
-	var missing []string
-	for _, name := range []string{"ffmpeg", "ffprobe"} {
-		if _, err := exec.LookPath(name); err != nil {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		return &requirementsError{missing}
-	}
-	return nil
-}
-
-// checkMediaRequirements checks only the tools required by these sources, so
-// local files and direct streams do not depend on a video-site extractor.
+// checkMediaRequirements checks the first item before starting playback. Later
+// queue items report missing capabilities when selected, without blocking native
+// tracks earlier in the queue. Codec requirements are determined from content.
 func checkMediaRequirements(items []MediaItem) error {
-	missing, seen := []string{}, map[string]bool{}
-	need := func(name string) {
-		if seen[name] {
-			return
-		}
-		seen[name] = true
-		if _, err := exec.LookPath(name); err != nil {
-			missing = append(missing, name)
-		}
+	if _, err := loadToolSettings(); err != nil {
+		return err
 	}
-	need("mpv")
-	need("ffmpeg")
-	mpv, _ := exec.LookPath("mpv")
-	hasExtractor := findYtdl(mpv) != ""
-	for _, item := range items {
-		if item.Kind == MediaPodcast {
-			need("ffprobe")
-		}
-		providerNeedsExtractor := item.Kind == MediaProvider && slices.Contains([]string{"youtube", "ytmusic", "soundcloud", "mixcloud"}, item.Provider)
-		if (sourceNeedsYtdl(item.Source) || providerNeedsExtractor) && !hasExtractor && !seen["yt-dlp"] {
-			seen["yt-dlp"] = true
-			missing = append(missing, "yt-dlp")
+	if len(items) == 0 {
+		return nil
+	}
+	item := items[0]
+	providerNeedsExtractor := item.Kind == MediaProvider && slices.Contains([]string{"youtube", "ytmusic", "soundcloud", "mixcloud"}, item.Provider)
+	if !sourceNeedsYtdl(item.Source) && !providerNeedsExtractor {
+		return nil
+	}
+	var missing []string
+	for _, name := range []string{"ffmpeg", "yt-dlp"} {
+		if _, err := toolPath(name); err != nil {
+			if _, absent := errors.AsType[*requirementsError](err); !absent {
+				return err
+			}
+			missing = append(missing, name)
 		}
 	}
 	if len(missing) > 0 {
 		return &requirementsError{missing}
 	}
-	return nil
+	_, _, err := selectedJSRuntime()
+	return err
 }
 
-// findYtdl uses the same search locations as the requirements check so doctor
-// can report and run the discovered extractor, including portable installs.
-func findYtdl(mpv string) string {
-	var dirs []string
-	if dir := os.Getenv("MPV_HOME"); dir != "" {
-		dirs = append(dirs, dir)
-	}
-	if mpv != "" {
-		dir := filepath.Dir(mpv)
-		dirs = append(dirs, dir, filepath.Join(dir, "portable_config"))
-	}
-	if dir, err := os.UserConfigDir(); err == nil {
-		dirs = append(dirs, filepath.Join(dir, "mpv"))
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".config", "mpv"))
-	}
-
-	// the names mpv tries, in its order
-	for _, name := range []string{"yt-dlp", "yt-dlp_x86", "youtube-dl"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path
-		}
-		for _, dir := range dirs {
-			if path, err := exec.LookPath(filepath.Join(dir, name)); err == nil {
-				return path
-			}
-		}
-	}
-	return ""
-}
+// findYtdl retains its argument for portable-install compatibility.
+func findYtdl(_ string) string { result, _ := toolPath("yt-dlp"); return result }

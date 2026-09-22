@@ -74,13 +74,13 @@ func (m *foregroundMediaModel) start(offset time.Duration) tea.Cmd {
 	p := raw.(*pcmPlayer)
 	p.setEqualizer(m.eq.activeBands())
 	if m.rate != 0 && m.rate != 1 {
-		if err := p.command("set_property", "speed", m.rate); err != nil {
+		if err := p.setSpeed(m.rate); err != nil {
 			p.close()
 			m.state, m.err = "failed", err.Error()
 			return nil
 		}
 	}
-	if err := p.command("loadfile", item.Source, "replace"); err != nil {
+	if err := p.load(item.Source); err != nil {
 		p.close()
 		m.state, m.err = "failed", err.Error()
 		return nil
@@ -100,7 +100,11 @@ func rememberForegroundProviderItem(item MediaItem) {
 }
 
 func (m *foregroundMediaModel) preloadNextLocal() {
-	if m.player == nil || m.current().Kind != MediaTrack || m.shuffle {
+	if m.player == nil {
+		return
+	}
+	if m.current().Kind != MediaTrack || m.shuffle {
+		m.player.cancelPreload()
 		return
 	}
 	next := m.index + 1
@@ -119,6 +123,8 @@ func (m *foregroundMediaModel) preloadNextLocal() {
 			}
 		}
 		m.player.preload(item.Source, offset, true)
+	} else {
+		m.player.cancelPreload()
 	}
 }
 
@@ -317,7 +323,7 @@ func (m *foregroundMediaModel) mediaState() media.State {
 		status = media.StatusPaused
 	}
 	item := m.current()
-	audio := m.settings.Audio.status(m.settings.Audio.Device)
+	audio := activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player)
 	state := media.State{Status: status, Volume: float64(m.settings.Volume) / 100,
 		AudioDevice: audio.ActiveDevice, AudioFormat: audio.Format,
 		Track: media.Track{Title: item.Title, Artist: item.Artist, Album: item.Album, Genre: item.Genre, URL: item.Source, ArtURL: item.Artwork,
@@ -351,6 +357,11 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case foregroundPlayerMsg:
 		if msg.generation != m.generation || !msg.open {
 			return m, nil
+		}
+		if msg.event.handoff != 0 {
+			m.preloadNextLocal()
+			m.player.startHandoff(msg.event.handoff)
+			return m, waitForegroundPlayer(m.player, m.generation)
 		}
 		if msg.event.err != "" {
 			m.state, m.err = "failed", msg.event.err
@@ -425,15 +436,15 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Kind {
 		case media.Toggle:
 			m.paused = !m.paused
-			_ = m.player.command("set_property", "pause", m.paused)
+			_ = m.player.setPaused(m.paused)
 			providerSync = m.syncProviderProgress(foregroundPlaybackState(m.paused))
 		case media.Play:
 			m.paused = false
-			_ = m.player.command("set_property", "pause", false)
+			_ = m.player.setPaused(false)
 			providerSync = m.syncProviderProgress("playing")
 		case media.Pause:
 			m.paused = true
-			_ = m.player.command("set_property", "pause", true)
+			_ = m.player.setPaused(true)
 			providerSync = m.syncProviderProgress("paused")
 		case media.Stop:
 			return m, tea.Quit
@@ -484,13 +495,13 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "space":
 			m.paused = !m.paused
-			if err := m.player.command("set_property", "pause", m.paused); err != nil {
+			if err := m.player.setPaused(m.paused); err != nil {
 				m.err = err.Error()
 			}
 			return m, m.syncProviderProgress(foregroundPlaybackState(m.paused))
 		case "m":
 			m.muted = !m.muted
-			if err := m.player.command("set_property", "mute", m.muted); err != nil {
+			if err := m.player.setMuted(m.muted); err != nil {
 				m.err = err.Error()
 			}
 		case "9":
@@ -523,7 +534,7 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				delta = 0.25
 			}
 			m.rate = min(3, max(0.5, m.rate+delta))
-			if err := m.player.command("set_property", "speed", m.rate); err != nil {
+			if err := m.player.setSpeed(m.rate); err != nil {
 				m.err = err.Error()
 			}
 		case "y":
@@ -576,7 +587,7 @@ func (m *foregroundMediaModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *foregroundMediaModel) setVolume(volume int) {
 	volume = max(0, min(100, volume))
-	if err := m.player.command("set_property", "volume", volume); err != nil {
+	if err := m.player.setVolume(volume); err != nil {
 		m.err = err.Error()
 		return
 	}
@@ -658,7 +669,7 @@ func (m *foregroundMediaModel) View() tea.View {
 		status := orderedInterfaceStatus(presentation, map[string]string{
 			"state": m.state, "position": clock(position.Seconds()) + " / " + duration, "title": item.display(),
 			"queue": fmt.Sprintf("%d of %d", m.index+1, len(m.items)), "volume": fmt.Sprintf("vol %d", m.settings.Volume),
-			"equalizer": "eq " + m.eq.Preset, "network": m.state, "audio": m.settings.Audio.status(m.settings.Audio.Device).Format,
+			"equalizer": "eq " + m.eq.Preset, "network": m.state, "audio": activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player).Format,
 			"speed": fmt.Sprintf("%.2fx", m.rate), "shuffle": shuffleStatus, "repeat": repeatStatus, "muted": mutedStatus,
 		})
 		if status != "" {
@@ -683,7 +694,7 @@ func (m *foregroundMediaModel) View() tea.View {
 	}
 	lines = append(lines, foregroundPanelLines(presentation, m.width, m.height, map[string]string{
 		"source": string(item.Kind), "queue": fmt.Sprintf("%d of %d", m.index+1, len(m.items)), "equalizer": m.eq.Preset,
-		"audio": m.settings.Audio.status(m.settings.Audio.Device).Format, "downloads": readyDownloads, "network": m.state, "metadata": item.display(),
+		"audio": activeAudioStatus(m.settings.Audio, m.settings.Audio.Device, m.player).Format, "downloads": readyDownloads, "network": m.state, "metadata": item.display(),
 	})...)
 	if presentation.ShowHelp {
 		hints := []string{presentation.bindingHint("playback.quit", "quit"), presentation.bindingHint("playback.pause", "pause"), presentation.bindingHint("playback.mute", "mute"), presentation.bindingHint("playback.lyrics", "lyrics"), presentation.bindingHint("playback.favorite", "favorite"), presentation.bindingHint("playback.bookmark", "bookmark"), presentation.bindingPairHint("playback.seek-back", "playback.seek-forward", "seek"), presentation.bindingPairHint("playback.previous", "playback.next", "previous/next")}

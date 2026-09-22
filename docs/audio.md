@@ -2,9 +2,16 @@
 
 ![Choosing an audio profile and output device](../assets/audio.png)
 
-Chill sends decoded float PCM through the equalizer and visualizer before mpv
-opens the selected output device. Output settings apply to stations, podcasts,
+Chill decodes audio to float PCM, applies speed, mono, and equalizer settings,
+and sends it to an embedded native output backend. The visualizer observes
+consumed samples before output volume and mute. Output settings apply to stations, podcasts,
 local media, direct URLs, and provider tracks in daemon and foreground mode.
+
+Saved volume levels retain the previous cubic gain curve, so upgrading preserves
+listening levels. Native sample-rate conversion uses a band-limited filter to
+prevent aliasing when playing high-resolution audio at a lower output rate.
+MP3 playback honors Xing/LAME encoder delay and padding, including duration and
+seek positions. Chained Ogg Vorbis sources continue across song boundaries.
 
 ## Profiles
 
@@ -36,7 +43,7 @@ playback and `--fg`.
 
 ## Devices
 
-`chill device list` reports mpv's cross-platform output identifiers and marks
+`chill device list` reports stable native output identifiers and marks
 the selected preference. `chill device set <id-or-name>` accepts an exact id,
 an exact display name, or one unambiguous partial match. `chill device default`
 returns to automatic system routing.
@@ -52,3 +59,17 @@ Left and right cycle advanced values, and `Ctrl+R` refreshes device discovery.
 `status --json` includes desired settings, active device, active sample rate,
 and the PCM format. `chill doctor` checks device enumeration and reports an
 unavailable saved selection.
+
+The active backend uses CoreAudio on macOS, WASAPI on Windows, and PulseAudio
+or ALSA on Linux. Selecting an output changes only Chill's routing. Existing
+saved device identities remain accepted. Exclusive mode is available only when
+the selected backend and device support it; a failed request retains the
+previous configuration. PulseAudio shared outputs do not support exclusive mode.
+
+The Lossless profile increases processing precision and sample rate; system
+mixers and device conversion may still apply. `active_sample_rate` is the PCM
+pipeline rate; `device_sample_rate` is the rate negotiated with the audio backend.
+JSON audio status also reports `backend` and `active_exclusive`.
+
+Use `chill doctor --audio` to explicitly open and close the chosen output without
+playing sound. Plain `chill doctor` only enumerates devices.

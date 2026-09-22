@@ -712,7 +712,11 @@ func (provider *ytDLPProvider) search(ctx context.Context, query string, limit i
 		return nil, errors.New("yt-dlp is not installed")
 	}
 	search := fmt.Sprintf("%s%d:%s", provider.prefix, limit, query)
-	args := []string{"--ignore-config", "--flat-playlist", "--skip-download", "--no-warnings", "--dump-json"}
+	args, err := extractorArgs()
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--flat-playlist", "--skip-download", "--dump-json")
 	if provider.config.CookiesFrom != "" {
 		args = append(args, "--cookies-from-browser", provider.config.CookiesFrom)
 	}
@@ -722,11 +726,16 @@ func (provider *ytDLPProvider) search(ctx context.Context, query string, limit i
 	if err != nil {
 		return nil, err
 	}
-	var diagnostics strings.Builder
+	var diagnostics tailBuffer
 	command.Stderr = &diagnostics
-	if err := command.Start(); err != nil {
-		return nil, err
+	command.WaitDelay = time.Second
+	tree, startErr := startInTree(command)
+	if startErr != nil {
+		return nil, startErr
 	}
+	stopTree := context.AfterFunc(ctx, func() { tree.kill() })
+	defer stopTree()
+	defer tree.kill()
 	var items []MediaItem
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
@@ -761,6 +770,10 @@ func (provider *ytDLPProvider) search(ctx context.Context, query string, limit i
 		items = append(items, providerMediaItem(provider.providerKey, entry.ID, entry.Title, artist, entry.Album, entry.Thumbnail, pageURL, entry.Duration))
 	}
 	scanErr := scanner.Err()
+	if scanErr != nil {
+		tree.kill()
+		stdout.Close()
+	}
 	waitErr := command.Wait()
 	if scanErr != nil {
 		return nil, scanErr

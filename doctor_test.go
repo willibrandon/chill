@@ -54,10 +54,10 @@ func TestDoctorMissingDependencies(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("MPV_HOME", t.TempDir())
 	var out bytes.Buffer
-	if err := runDoctor(nil, &out); err == nil {
-		t.Fatal("missing dependencies should fail doctor")
+	if err := runDoctor(nil, &out); err != nil {
+		t.Fatal("optional dependencies should not fail doctor", err)
 	}
-	for _, want := range []string{"[FAIL] mpv", "[FAIL] yt-dlp", "[FAIL] ffmpeg", strings.Join(installCommands([]string{"ffmpeg"}), "` then `"), "no daemon running"} {
+	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", strings.Join(installCommands([]string{"ffmpeg"}), "` then `"), "no daemon running"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in %s", want, out.String())
 		}

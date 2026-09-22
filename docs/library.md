@@ -25,10 +25,12 @@ chill open
 ```
 
 Folders are scanned recursively in path order. Supported extensions are AAC,
-AIFF, ALAC, FLAC, M4A, MP3, MP4, OGA, OGG, Opus, WAV, WebM, and WMA. ffprobe
-reads title, artist, album, genre, duration, and embedded lyrics. Embedded cover
-art is extracted once into Chill's cache. Consecutive local tracks prewarm the
-next FFmpeg decoder and feed one continuous mpv PCM stream for gapless changes.
+AIFF, ALAC, FLAC, M4A, MP3, MP4, OGA, OGG, Opus, WAV, WebM, and WMA. Built-in
+readers extract tags, duration, lyrics, and artwork for native formats; ffprobe
+provides additional metadata when installed. Missing metadata does not prevent
+a track from appearing in the library. Additional codecs require FFmpeg when
+selected for playback. Consecutive local tracks prewarm the next decoder and
+share a continuous native audio output for gapless changes.
 
 Finite media saves progress every 15 seconds and when paused, sought, switched,
 or stopped. Returning to an unfinished item resumes five seconds early after

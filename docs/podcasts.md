@@ -136,8 +136,11 @@ active transfer and deletes only the matching file inside Chill's managed cache.
 
 ## Playback
 
-mpv plays the audio; FFmpeg decodes it and ffprobe measures the episode length.
-`chill doctor` checks all three. ffprobe comes with normal FFmpeg installations.
+Chill plays native formats directly, including cached MP3 episodes. Additional
+codecs such as AAC/M4A require FFmpeg. Duration comes from native readers or
+optional ffprobe, which is included in normal FFmpeg installations. Missing
+probing support does not prevent playback. `chill doctor` explains which
+capabilities are available. Playback speed preserves pitch.
 It also checks that the saved podcast settings can be read.
 Feed durations are estimates and are replaced with the measured length when
 the download finishes.

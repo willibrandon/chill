@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,16 +45,8 @@ func stereoFixture(t *testing.T, seconds int) string {
 
 // TestPCMIntegration exercises real decoding, stereo capture, pause, and cleanup.
 func TestPCMIntegration(t *testing.T) {
-	for _, name := range []string{"mpv", "ffmpeg"} {
-		if _, err := exec.LookPath(name); err != nil {
-			t.Fatalf("playback tests require %s: %v; install with %s", name, err, strings.Join(installCommands([]string{name}), "; "))
-		}
-	}
+	useTestAudio(t)
 	dir := t.TempDir()
-	t.Setenv("MPV_HOME", dir)
-	if err := os.WriteFile(filepath.Join(dir, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	for _, paused := range []bool{false, true} {
 		t.Run(map[bool]string{true: "start-paused", false: "playing"}[paused], func(t *testing.T) {
 			p, err := startPCMPlayer(55, false, paused)
@@ -63,7 +54,7 @@ func TestPCMIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.close()
-			if err := p.command("loadfile", stereoFixture(t, 8), "replace"); err != nil {
+			if err := p.load(stereoFixture(t, 8)); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -75,6 +66,15 @@ func TestPCMIntegration(t *testing.T) {
 				t.Fatal("PCM output did not load")
 			}
 			pcm := p.(*pcmPlayer)
+			if paused {
+				time.Sleep(40 * time.Millisecond)
+				if pcm.position() != 0 || pcm.audioFrame().Sequence != 0 {
+					t.Fatal("paused output consumed audio")
+				}
+				if err := p.setPaused(false); err != nil {
+					t.Fatal(err)
+				}
+			}
 			deadline := time.Now().Add(3 * time.Second)
 			for {
 				frame := pcm.audioFrame()
@@ -87,7 +87,7 @@ func TestPCMIntegration(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 			}
 			for _, cmd := range [][]any{{"set_property", "pause", true}, {"set_property", "volume", 32}, {"set_property", "mute", true}, {"set_property", "pause", false}, {"set_property", "pause", true}} {
-				if err := p.command(cmd...); err != nil {
+				if err := testPlayerCommand(p, cmd...); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -107,12 +107,12 @@ func TestPCMIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer p.close()
-		if err := p.command("loadfile", filepath.Join(dir, "missing.wav"), "replace"); err != nil {
+		if err := p.load(filepath.Join(dir, "missing.wav")); err != nil {
 			t.Fatal(err)
 		}
 		select {
 		case e := <-p.events():
-			if !strings.Contains(e.err, "audio decoder") || !strings.Contains(e.err, "missing.wav") {
+			if !strings.Contains(e.err, "missing.wav") {
 				t.Fatalf("decoder diagnostics lost: %+v", e)
 			}
 		case <-time.After(5 * time.Second):
@@ -128,7 +128,7 @@ func TestPCMIntegration(t *testing.T) {
 		var bands audio.EqualizerBands
 		bands[4] = -12
 		p.setEqualizer(bands)
-		if err := p.command("loadfile", stereoFixture(t, 4), "replace"); err != nil {
+		if err := p.load(stereoFixture(t, 4)); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -182,16 +182,7 @@ func TestExtractorAudioFormatAvoidsMixcloudDASH(t *testing.T) {
 
 // TestPCMLocalTransitionKeepsOutputAndUsesPreload checks the gapless local path.
 func TestPCMLocalTransitionKeepsOutputAndUsesPreload(t *testing.T) {
-	for _, name := range []string{"mpv", "ffmpeg"} {
-		if _, err := exec.LookPath(name); err != nil {
-			t.Fatalf("playback tests require %s: %v", name, err)
-		}
-	}
-	config := t.TempDir()
-	t.Setenv("MPV_HOME", config)
-	if err := os.WriteFile(filepath.Join(config, "mpv.conf"), []byte("ao=null\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	useTestAudio(t)
 	first, second := stereoFixture(t, 1), stereoFixture(t, 1)
 	raw, err := newPCMPlayer(55, false, false, 0, true)
 	if err != nil {
@@ -199,20 +190,27 @@ func TestPCMLocalTransitionKeepsOutputAndUsesPreload(t *testing.T) {
 	}
 	p := raw.(*pcmPlayer)
 	defer p.close()
-	if err := p.command("loadfile", first, "replace"); err != nil {
+	if err := p.load(first); err != nil {
 		t.Fatal(err)
 	}
 	output := p.output
 	p.preload(second, 0, true)
 	wait := func(kind string) {
 		t.Helper()
-		select {
-		case event := <-p.events():
-			if kind == "loaded" && !event.loaded || kind == "ended" && !event.ended {
-				t.Fatalf("wanted %s event, got %+v", kind, event)
+		for {
+			select {
+			case event := <-p.events():
+				if event.handoff != 0 {
+					p.startHandoff(event.handoff)
+					continue
+				}
+				if kind == "loaded" && !event.loaded || kind == "ended" && !event.ended {
+					t.Fatalf("wanted %s event, got %+v", kind, event)
+				}
+				return
+			case <-time.After(4 * time.Second):
+				t.Fatalf("timed out waiting for %s", kind)
 			}
-		case <-time.After(4 * time.Second):
-			t.Fatalf("timed out waiting for %s", kind)
 		}
 	}
 	wait("loaded")
@@ -223,7 +221,7 @@ func TestPCMLocalTransitionKeepsOutputAndUsesPreload(t *testing.T) {
 	}
 	wait("loaded")
 	if p.output != output {
-		t.Fatal("local transition replaced the mpv PCM output")
+		t.Fatal("local transition replaced the native output")
 	}
 	if delay := time.Since(started); delay > 250*time.Millisecond {
 		t.Fatalf("preloaded transition took %s", delay)

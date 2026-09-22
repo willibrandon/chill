@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"os/exec"
-	"regexp"
+	"github.com/willibrandon/chill/internal/playback"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,7 +41,7 @@ With no command, lists every available output device.`
 // AudioSettings contains durable output routing and quality preferences.
 type AudioSettings struct {
 	Profile         string `json:"profile"`          // Profile selects a named quality configuration.
-	Device          string `json:"device,omitempty"` // Device is an mpv output identifier, or auto.
+	Device          string `json:"device,omitempty"` // Device is a native output identifier, or auto.
 	SampleRate      int    `json:"sample_rate"`      // SampleRate is decoded PCM Hz.
 	BufferMS        int    `json:"buffer_ms"`        // BufferMS is the output buffer in milliseconds.
 	ResampleQuality int    `json:"resample_quality"` // ResampleQuality ranges from one through four.
@@ -54,17 +52,25 @@ type AudioSettings struct {
 
 // AudioStatus describes desired and active audio output state.
 type AudioStatus struct {
+	// Backend identifies the active native audio backend.
+	Backend string `json:"backend,omitempty"`
+	// ActiveExclusive reports successful exclusive device access.
+	ActiveExclusive bool `json:"active_exclusive"`
+	// OutputWarning explains a fallback or output limitation.
+	OutputWarning string `json:"output_warning,omitempty"`
+	// DeviceSampleRate reports the rate negotiated with the native backend.
+	DeviceSampleRate int `json:"device_sample_rate,omitzero"`
 	AudioSettings
-	ActiveDevice     string `json:"active_device"`      // ActiveDevice is the currently requested mpv device.
+	ActiveDevice     string `json:"active_device"`      // ActiveDevice is the currently requested output device.
 	ActiveSampleRate int    `json:"active_sample_rate"` // ActiveSampleRate is the PCM pipeline rate.
 	Format           string `json:"format"`             // Format describes PCM precision and layout.
 }
 
-// AudioDevice describes one mpv output destination.
+// AudioDevice describes one native output destination.
 type AudioDevice struct {
-	ID      string `json:"id"`      // ID is the stable mpv device identifier.
+	ID      string `json:"id"`      // ID is the stable native device identifier.
 	Name    string `json:"name"`    // Name is the human-readable device label.
-	Default bool   `json:"default"` // Default identifies mpv automatic routing.
+	Default bool   `json:"default"` // Default identifies automatic system routing.
 	Active  bool   `json:"active"`  // Active identifies the selected preference.
 }
 
@@ -129,32 +135,32 @@ func (settings AudioSettings) status(activeDevice string) AudioStatus {
 	return AudioStatus{AudioSettings: settings, ActiveDevice: activeDevice, ActiveSampleRate: settings.SampleRate, Format: format}
 }
 
-var mpvDevicePattern = regexp.MustCompile(`^\s*'([^']+)'\s+\((.*)\)\s*$`)
-
 var enumerateAudioDevices = listAudioDevices
+var nativeAudioDevices = playback.Devices
 
 func listAudioDevices(ctx context.Context, selected string) ([]AudioDevice, error) {
-	command := exec.CommandContext(ctx, "mpv", "--no-config", "--audio-device=help", "--no-video")
-	output, err := command.CombinedOutput()
+	infos, err := nativeAudioDevices(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list audio devices: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	var devices []AudioDevice
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		match := mpvDevicePattern.FindStringSubmatch(scanner.Text())
-		if len(match) != 3 {
-			continue
-		}
-		devices = append(devices, AudioDevice{ID: match[1], Name: match[2], Default: match[1] == "auto", Active: match[1] == selected})
-	}
-	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if len(devices) == 0 {
-		return nil, errors.New("mpv reported no audio output devices")
+	devices := make([]AudioDevice, 0, len(infos))
+	for _, info := range infos {
+		devices = append(devices, AudioDevice{ID: info.ID, Name: info.Name, Default: info.Default, Active: info.ID == selected})
 	}
 	return devices, nil
+}
+func activeAudioStatus(settings AudioSettings, selected string, p player) AudioStatus {
+	status := settings.status(selected)
+	if native, ok := p.(*pcmPlayer); ok && native.output != nil {
+		info := native.output.Info()
+		status.Backend = info.Backend
+		status.ActiveExclusive = info.Exclusive
+		status.DeviceSampleRate = info.SampleRate
+	}
+	if status.ActiveDevice != status.Device {
+		status.OutputWarning = fmt.Sprintf("audio device %q unavailable; using %s", status.Device, status.ActiveDevice)
+	}
+	return status
 }
 
 func resolveAudioDevice(ctx context.Context, value, selected string) (string, error) {
@@ -439,7 +445,7 @@ func (d *Daemon) applyAudioSettings(next AudioSettings) string {
 	compare.Device = previous.Device
 	deviceOnly = deviceOnly && compare == previous
 	if deviceOnly && d.player != nil {
-		if err := d.player.command("set_property", "audio-device", next.Device); err != nil {
+		if err := d.player.setDevice(next.Device); err != nil {
 			return fail("audio device unchanged: " + err.Error())
 		}
 		d.activeAudioDevice = next.Device
@@ -476,36 +482,27 @@ func (d *Daemon) applyAudioSettings(next AudioSettings) string {
 	}
 	if err := savePlaybackSettings(d.playbackSettings()); err != nil {
 		d.audio = previous
-		if deviceOnly && d.player != nil {
-			_ = d.player.command("set_property", "audio-device", previous.Device)
-		}
 		d.activeAudioDevice = previousActive
 		d.audioDeviceFallback = previousFallback
-		return fail("audio changed, but could not save it: " + err.Error())
+		var restoreErr error
+		if d.player != nil {
+			if deviceOnly {
+				restoreErr = d.player.setDevice(previousActive)
+			} else if d.current != nil {
+				position := d.episodePosition()
+				d.closePlayer()
+				if d.current.finite() {
+					d.episodeOffset = position
+				}
+				restoreErr = d.startPlayback()
+			}
+		}
+		if restoreErr != nil {
+			return fail("could not save audio settings or restore output: " + errors.Join(err, restoreErr).Error())
+		}
+		return fail("audio settings unchanged; could not save: " + err.Error())
 	}
 	return ok(formatAudioSettings(next))
-}
-
-func audioSettingsArgs(settings AudioSettings) (int, []string, []string) {
-	settings = normalizeAudioSettings(settings)
-	mpvOptions := []string{
-		"--demuxer=rawaudio", "--demuxer-rawaudio-format=floatle",
-		fmt.Sprintf("--demuxer-rawaudio-rate=%d", settings.SampleRate), "--demuxer-rawaudio-channels=stereo",
-		"--cache=no", "--demuxer-readahead-secs=0", "--demuxer-max-bytes=16384",
-		fmt.Sprintf("--audio-buffer=%.3f", float64(settings.BufferMS)/1000), "--ytdl=no", "--loop-file=no",
-	}
-	if settings.Device != "" && settings.Device != "auto" {
-		mpvOptions = append(mpvOptions, "--audio-device="+settings.Device)
-	}
-	if settings.Exclusive {
-		mpvOptions = append(mpvOptions, "--audio-exclusive=yes")
-	}
-	filterSize := []int{0, 16, 32, 64, 128}[settings.ResampleQuality]
-	filter := fmt.Sprintf("aresample=%d:filter_size=%d", settings.SampleRate, filterSize)
-	if settings.Mono {
-		filter = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1," + filter
-	}
-	return settings.SampleRate, mpvOptions, []string{"-af", filter}
 }
 
 func (d *Daemon) refreshAudioDevice(ctx context.Context) {
@@ -526,7 +523,7 @@ func (d *Daemon) refreshAudioDevice(ctx context.Context) {
 		return
 	}
 	if !available && active != "auto" {
-		if d.player == nil || d.player.command("set_property", "audio-device", "auto") == nil {
+		if d.player == nil || d.player.setDevice("auto") == nil {
 			d.activeAudioDevice = "auto"
 			d.audioDeviceFallback = true
 			d.storageError = fmt.Sprintf("audio device %q disconnected; using the system default", desired)
@@ -534,7 +531,7 @@ func (d *Daemon) refreshAudioDevice(ctx context.Context) {
 		return
 	}
 	if available && active == "auto" {
-		if d.player == nil || d.player.command("set_property", "audio-device", desired) == nil {
+		if d.player == nil || d.player.setDevice(desired) == nil {
 			d.activeAudioDevice = desired
 			d.audioDeviceFallback = false
 			if strings.HasPrefix(d.storageError, "audio device ") {

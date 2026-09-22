@@ -23,6 +23,12 @@ func (p *fakePlayer) command(args ...any) error {
 	p.commands = append(p.commands, args)
 	return p.err
 }
+func (p *fakePlayer) load(v string) error                     { return p.command("loadfile", v, "replace") }
+func (p *fakePlayer) setPaused(v bool) error                  { return p.command("set_property", "pause", v) }
+func (p *fakePlayer) setVolume(v int) error                   { return p.command("set_property", "volume", v) }
+func (p *fakePlayer) setMuted(v bool) error                   { return p.command("set_property", "mute", v) }
+func (p *fakePlayer) setSpeed(v float64) error                { return p.command("set_property", "speed", v) }
+func (p *fakePlayer) setDevice(v string) error                { return p.command("set_property", "audio-device", v) }
 func (p *fakePlayer) setEqualizer(bands audio.EqualizerBands) { p.eq = bands }
 func (p *fakePlayer) events() <-chan playerEvent              { return p.event }
 func (p *fakePlayer) close()                                  { p.closed = true }

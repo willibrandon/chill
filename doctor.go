@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,6 +19,7 @@ type doctorOptions struct {
 	timeout   time.Duration
 	logs      bool
 	providers bool
+	audio     bool
 }
 
 func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
@@ -28,8 +28,9 @@ func parseDoctorOptions(args []string, out io.Writer) (doctorOptions, error) {
 	flags.SetOutput(out)
 	flags.Usage = func() { printDoctorHelp(flags) }
 	flags.BoolVar(&options.stations, "stations", false, "resolve every configured station without playing audio")
-	flags.StringVar(&options.stream, "stream", "", "resolve one station name or URL without playing audio")
+	flags.StringVar(&options.stream, "stream", "", "decode one station, URL, or file without playing audio")
 	flags.DurationVar(&options.timeout, "timeout", 45*time.Second, "timeout per stream check")
+	flags.BoolVar(&options.audio, "audio", false, "open the selected output briefly without audible audio")
 	flags.BoolVar(&options.logs, "logs", false, "include the most recent daemon startup log")
 	flags.BoolVar(&options.providers, "providers", false, "validate enabled provider credentials and connections")
 	if err := flags.Parse(args); err != nil {
@@ -83,31 +84,48 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 	exe = resolvedExecutable(exe)
 	r.check("OK", "client", fmt.Sprintf("chill %s, protocol %d (%s)", buildVersion(), daemonProtocol, exe))
 
-	mpv, _ := exec.LookPath("mpv")
-	extractor := findYtdl(mpv)
-	r.program(ctx, "mpv", mpv)
-	r.program(ctx, "yt-dlp", extractor)
-	ffmpeg, _ := exec.LookPath("ffmpeg")
-	r.program(ctx, "ffmpeg", ffmpeg)
-	ffprobe, _ := exec.LookPath("ffprobe")
-	r.program(ctx, "ffprobe", ffprobe)
-	if deno, _ := exec.LookPath("deno"); deno != "" {
-		r.program(ctx, "deno", deno)
+	r.check("OK", "native playback", "MP3, FLAC, PCM WAV, and Ogg Vorbis are built in")
+	if _, err := loadToolSettings(); err != nil {
+		r.check("FAIL", "tool settings", err.Error())
+	}
+	for _, tool := range []struct{ name, capability string }{{"ffmpeg", "additional formats, HLS, and website playback"}, {"yt-dlp", "YouTube and supported websites"}, {"ffprobe", "additional metadata and duration probing"}} {
+		path, err := toolPath(tool.name)
+		if err != nil {
+			if _, invalid := errors.AsType[*toolConfigError](err); invalid {
+				r.check("FAIL", tool.name, err.Error())
+			} else {
+				r.check("WARN", tool.name, tool.capability+" unavailable: "+err.Error()+"; install with `"+strings.Join(installCommands([]string{tool.name}), "` then `")+"`")
+			}
+		} else {
+			r.program(ctx, tool.name, path)
+			if tool.name == "yt-dlp" && path == legacyExtractorPath() {
+				settings, _ := loadToolSettings()
+				if settings.YTDLP == "" {
+					r.check("WARN", "yt-dlp location", "using a legacy portable location; set yt_dlp in tools.json or put the executable on PATH")
+				}
+			}
+		}
+	}
+	runtime, path, runtimeErr := selectedJSRuntime()
+	if runtimeErr != nil {
+		r.check("FAIL", "YouTube runtime", runtimeErr.Error())
+	} else if path == "" {
+		r.check("WARN", "YouTube runtime", "no JavaScript runtime found; install Deno or select Node or QuickJS in tools.json")
 	} else {
-		r.check("WARN", "YouTube runtime", "Deno not found; current yt-dlp needs a JavaScript runtime for full YouTube support. Install deno or configure another supported runtime in yt-dlp")
+		r.program(ctx, runtime, path)
+		r.check("OK", "YouTube setup", "runtime detected; use --stream with a YouTube URL to verify extraction and EJS components")
 	}
 
 	settings, settingsErr := loadPlaybackSettings()
 	if settingsErr != nil {
 		r.check("FAIL", "audio settings", settingsErr.Error())
-	} else if mpv == "" {
-		r.check("FAIL", "audio devices", "mpv is required to enumerate output devices")
+
 	} else {
 		deviceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		devices, deviceErr := listAudioDevices(deviceCtx, settings.Audio.Device)
 		cancel()
 		if deviceErr != nil {
-			r.check("FAIL", "audio devices", deviceErr.Error())
+			r.check("WARN", "audio devices", deviceErr.Error())
 		} else {
 			selected := settings.Audio.Device == "auto" || slices.ContainsFunc(devices, func(device AudioDevice) bool { return device.ID == settings.Audio.Device })
 			level := "OK"
@@ -116,6 +134,20 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 				level, message = "WARN", message+"; selected device is disconnected and playback will use the system default"
 			}
 			r.check(level, "audio devices", message)
+		}
+	}
+	if options.audio && settingsErr == nil {
+		output, err := openAudioOutput(outputSettings(settings.Audio), 0, true, true)
+		if err != nil {
+			r.check("FAIL", "audio output", err.Error())
+		} else {
+			info := output.Info()
+			output.Close()
+			mode := "shared"
+			if info.Exclusive {
+				mode = "exclusive"
+			}
+			r.check("OK", "audio output", fmt.Sprintf("%s output opened successfully; PCM %d Hz, device %d Hz, %s", info.Backend, settings.Audio.SampleRate, info.SampleRate, mode))
 		}
 	}
 	registered, registration := deepLinkRegistrationStatus()
@@ -206,32 +238,26 @@ func runDoctorContext(ctx context.Context, args []string, out io.Writer) error {
 			checks = []Station{*station}
 		} else if strings.HasPrefix(options.stream, "https://") || strings.HasPrefix(options.stream, "http://") {
 			checks = []Station{{Name: "stream", URL: options.stream}}
+		} else if info, err := os.Stat(options.stream); err == nil && !info.IsDir() {
+			checks = []Station{{Name: "file", URL: options.stream}}
 		} else {
-			return fmt.Errorf("unknown station %q; use a configured station name or an HTTP(S) URL", options.stream)
+			return fmt.Errorf("unknown source %q; use a station, HTTP(S) URL, or local file", options.stream)
 		}
 	}
-	if len(checks) > 0 && extractor == "" {
-		r.check("FAIL", "streams", "cannot resolve streams until yt-dlp is installed")
-	} else {
-		for _, station := range checks {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Checking %s (%s)...\n", station.Name, station.URL)
-			info, err := probeStreamContext(ctx, extractor, station.URL, options.timeout)
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err != nil {
-				r.check("FAIL", station.Name, err.Error()+"; update yt-dlp, check your network, or replace the station URL with chill add")
-				continue
-			}
-			level := "OK"
-			if info.LiveStatus != "is_live" {
-				level = "WARN"
-			}
-			r.check(level, station.Name, fmt.Sprintf("%s (%s; stream resolves)", info.Title, info.LiveStatus))
+	for _, station := range checks {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		fmt.Fprintf(out, "Checking %s (%s)...\n", station.Name, station.URL)
+		info, err := probeStreamContext(ctx, "", station.URL, options.timeout)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			r.check("FAIL", station.Name, err.Error())
+			continue
+		}
+		r.check("OK", station.Name, info.Title+"; initial audio decoded successfully")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -248,22 +274,24 @@ func (r *doctorReport) program(ctx context.Context, name, path string) {
 		return
 	}
 	if path == "" {
-		r.check("FAIL", name, "not found; install with `"+strings.Join(installCommands([]string{name}), "` then `")+"`")
+		r.check("WARN", name, "not found; install with `"+strings.Join(installCommands([]string{name}), "` then `")+"`")
 		return
 	}
 	flag := "--version"
 	if name == "ffmpeg" || name == "ffprobe" {
 		flag = "-version"
+	} else if name == "quickjs" {
+		flag = "-h"
 	}
 	stdout, stderr, err := diagnosticCommandContext(ctx, path, 5*time.Second, flag)
 	if ctx.Err() != nil {
 		return
 	}
 	if err != nil {
-		r.check("FAIL", name, fmt.Sprintf("%s: %v; %s", path, err, stderr))
+		r.check("WARN", name, fmt.Sprintf("%s: %v; %s", path, err, stderr))
 		return
 	}
-	version := strings.SplitN(stdout, "\n", 2)[0]
+	version := strings.SplitN(firstNonempty(stdout, stderr), "\n", 2)[0]
 	r.check("OK", name, version+" ("+resolvedExecutable(path)+")")
 	if name == "yt-dlp" {
 		if date, err := time.Parse("2006.01.02", version); err == nil && time.Since(date) > 90*24*time.Hour {
@@ -331,23 +359,22 @@ type streamInfo struct {
 	LiveStatus string `json:"live_status"`
 }
 
-func probeStreamContext(ctx context.Context, extractor, url string, timeout time.Duration) (streamInfo, error) {
-	stdout, stderr, err := diagnosticCommandContext(ctx, extractor, timeout,
-		"--ignore-config", "--no-playlist", "--simulate", "--no-progress",
-		"--socket-timeout", "10", "--retries", "0", "--format", "bestaudio/best",
-		"--print", `{"title":%(title)j,"live_status":%(live_status)j}`, "--", url)
+func probeStreamContext(ctx context.Context, _ string, source string, timeout time.Duration) (streamInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	settings, err := loadPlaybackSettings()
 	if err != nil {
-		return streamInfo{}, fmt.Errorf("stream resolution: %w\n%s", err, stderr)
+		return streamInfo{}, err
 	}
-	var info streamInfo
-	if err := json.Unmarshal([]byte(stdout), &info); err != nil {
-		return info, fmt.Errorf("reading extractor result: %w", err)
+	reader, _, err := openPCM(ctx, source, 0, false, settings.Audio, func(string) {})
+	if err != nil {
+		return streamInfo{}, err
 	}
-	if info.Title == "" {
-		return info, fmt.Errorf("extractor returned no stream title")
+	defer reader.Close()
+	var block [4096]byte
+	n, err := io.ReadFull(reader, block[:])
+	if n < 8 || err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return streamInfo{}, fmt.Errorf("decode source: %w", err)
 	}
-	if info.LiveStatus == "" {
-		info.LiveStatus = "unknown live status"
-	}
-	return info, nil
+	return streamInfo{Title: source}, nil
 }

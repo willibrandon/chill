@@ -151,7 +151,9 @@ func printDoctorHelp(flags *flag.FlagSet) {
 	fmt.Fprint(flags.Output(), `Usage:
   chill doctor [options]
 
-Check dependencies, station configuration, and client/daemon compatibility.
+Check playback capabilities, configuration, and client/daemon compatibility.
+Missing optional tools produce warnings. Explicit source and audio checks fail
+when the requested capability is unavailable.
 
 Options:
 `)
@@ -164,5 +166,7 @@ Examples:
   chill doctor --stations
   chill doctor --stream lofi-girl --timeout 30s
   chill doctor --logs
+  chill doctor --audio
+  chill doctor --stream song.flac
 `)
 }

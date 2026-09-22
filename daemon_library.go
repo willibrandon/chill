@@ -168,7 +168,7 @@ func (d *Daemon) queueItems() []MediaItem {
 }
 
 func (d *Daemon) nextLocalPreload() (MediaItem, time.Duration, bool) {
-	if d.current == nil || d.current.Kind != MediaTrack || d.library == nil || d.library.Shuffle {
+	if d.current == nil || d.current.Kind != MediaTrack || d.library == nil || d.library.Shuffle || d.library.Repeat == "one" {
 		return MediaItem{}, 0, false
 	}
 	items := d.queueItems()
@@ -190,6 +190,8 @@ func (d *Daemon) preloadNextLocal() {
 	}
 	if item, offset, ok := d.nextLocalPreload(); ok {
 		player.preload(item.Source, offset, true)
+	} else {
+		player.cancelPreload()
 	}
 }
 
@@ -296,6 +298,7 @@ func (d *Daemon) previousItem() string {
 }
 
 func (d *Daemon) queueCommand(action, arg string) string {
+	defer d.preloadNextLocal()
 	library, err := d.mediaLibrary()
 	if err != nil {
 		return fail(err.Error())
@@ -307,7 +310,6 @@ func (d *Daemon) queueCommand(action, arg string) string {
 		if err := library.commit(); err != nil {
 			return fail(err.Error())
 		}
-		d.preloadNextLocal()
 		return ok(message)
 	}
 	switch action {

@@ -5,12 +5,15 @@ package main
 import (
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 )
 
-// processTree owns mpv's process group, including an in-flight yt-dlp resolver.
+// processTree owns an external helper's process group and all descendants.
 type processTree struct {
-	p *os.Process
+	p       *os.Process
+	once    sync.Once
+	killErr error
 }
 
 // startInTree starts cmd.
@@ -22,7 +25,8 @@ func startInTree(cmd *exec.Cmd) (*processTree, error) {
 	return &processTree{p: cmd.Process}, nil
 }
 
-// kill terminates the whole group, even if mpv itself has already exited.
+// kill terminates the whole group, even if its original process has exited.
 func (t *processTree) kill() error {
-	return syscall.Kill(-t.p.Pid, syscall.SIGKILL)
+	t.once.Do(func() { t.killErr = syscall.Kill(-t.p.Pid, syscall.SIGKILL) })
+	return t.killErr
 }
