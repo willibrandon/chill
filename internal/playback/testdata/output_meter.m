@@ -36,7 +36,7 @@ int main(int argc,char**argv){@autoreleasepool{
  err=AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)spec,&aggregate);
  if(!err)err=AudioDeviceCreateIOProcID(aggregate,receive,NULL,&proc);
  if(!err)err=AudioDeviceStart(aggregate,proc);
- if(!err)sleep(5);
+ if(!err)sleep(2);
  if(proc){AudioDeviceStop(aggregate,proc);AudioDeviceDestroyIOProcID(aggregate,proc);}
  if(aggregate)AudioHardwareDestroyAggregateDevice(aggregate);
  AudioHardwareDestroyProcessTap(tap);

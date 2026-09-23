@@ -115,19 +115,19 @@ func defaultInterfaceSettings() interfaceSettings {
 }
 
 func interfaceSettingsPath() string {
-	dir, err := os.UserConfigDir()
+	dir, err := chillConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "chill", "interface.json")
+	return filepath.Join(dir, "interface.json")
 }
 
 func userThemesDirectory() string {
-	dir, err := os.UserConfigDir()
+	dir, err := chillConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "chill", "themes")
+	return filepath.Join(dir, "themes")
 }
 
 func loadInterfaceSettings() (interfaceSettings, error) {

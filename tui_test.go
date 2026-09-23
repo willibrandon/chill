@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,50 +13,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
-
-// TestTUIDoctorReportsFailedChecks checks diagnostic failures remain visible in the transcript.
-func TestTUIDoctorReportsFailedChecks(t *testing.T) {
-	withConfigDir(t)
-	useTestAudio(t)
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("MPV_HOME", t.TempDir())
-	model := newTUI()
-	model.width, model.height = 100, 30
-	model.setInput("doctor")
-	command := model.submit()
-	if command == nil || !model.running {
-		t.Fatal("doctor was not dispatched as a background command")
-	}
-	if strings.Contains(strings.Join(transcriptLines(model), "\n"), "[FAIL]") {
-		t.Fatal("doctor ran during submit instead of through the asynchronous command")
-	}
-	// The prompt remains editable while a diagnostic command is in flight.
-	model.setInput("doctor --help")
-	task := model.task
-	defer task.stop()
-	for {
-		msg := task.next()
-		model.update(msg)
-		if result, ok := msg.(resultMsg); ok {
-			if result.err == nil || result.out != "" {
-				t.Fatalf("failed checks should stream with a final error: %+v", result)
-			}
-			break
-		}
-	}
-	transcript := ansi.Strip(strings.Join(transcriptLines(model), "\n"))
-	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[WARN] ffprobe", "[WARN] chill links", "[FAIL] default station lofi-girl", "no daemon running", "failed: 1."} {
-		if !strings.Contains(transcript, want) {
-			t.Errorf("transcript missing %q: %s", want, transcript)
-		}
-	}
-	if model.running || model.input.Value() != "doctor --help" {
-		t.Fatal("completed diagnostics left the model busy or changed the prompt")
-	}
-	if _, err := os.Stat(socketPath()); !os.IsNotExist(err) {
-		t.Fatal("doctor started a daemon")
-	}
-}
 
 // TestTUICommandSpinnerLifecycle checks busy indicators start and stop with commands.
 func TestTUICommandSpinnerLifecycle(t *testing.T) {

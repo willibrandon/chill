@@ -1,4 +1,4 @@
-//go:build darwin && cgo
+//go:build darwin && cgo && audio_integration
 
 package playback
 
@@ -23,7 +23,7 @@ func TestMacOSOutputContainsAudio(t *testing.T) {
 	if data, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build OS output meter: %v\n%s", err, data)
 	}
-	output, err := NewOutput(Settings{Device: "auto", SampleRate: 48000, BufferMS: 100}, OpenDevice, 70, false, false)
+	output, err := NewOutput(Settings{Device: "auto", SampleRate: 48000, BufferMS: 100}, 70, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

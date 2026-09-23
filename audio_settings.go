@@ -60,6 +60,8 @@ type AudioStatus struct {
 	OutputWarning string `json:"output_warning,omitempty"`
 	// DeviceSampleRate reports the rate negotiated with the native backend.
 	DeviceSampleRate int `json:"device_sample_rate,omitzero"`
+	// Output reports sample delivery to the driver, not acoustic audibility.
+	Output *playback.Statistics `json:"output,omitempty"`
 	AudioSettings
 	ActiveDevice     string `json:"active_device"`      // ActiveDevice is the currently requested output device.
 	ActiveSampleRate int    `json:"active_sample_rate"` // ActiveSampleRate is the PCM pipeline rate.
@@ -153,6 +155,7 @@ func activeAudioStatus(settings AudioSettings, selected string, p player) AudioS
 	status := settings.status(selected)
 	if native, ok := p.(*pcmPlayer); ok && native.output != nil {
 		info := native.output.Info()
+		status.Output = new(native.output.Statistics())
 		status.Backend = info.Backend
 		status.ActiveExclusive = info.Exclusive
 		status.DeviceSampleRate = info.SampleRate

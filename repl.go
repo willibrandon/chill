@@ -721,11 +721,10 @@ type history struct {
 func loadHistory() *history {
 	h := &history{}
 
-	dir, err := os.UserConfigDir()
+	dir, err := chillConfigDir()
 	if err != nil {
 		return h
 	}
-	dir = filepath.Join(dir, "chill")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return h
 	}

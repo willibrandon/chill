@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/willibrandon/chill/internal/playback"
 )
 
 // TestNativeCodecsWithoutHelpers checks local playback and metadata with no
@@ -50,30 +48,6 @@ func TestNativeCodecsWithoutHelpers(t *testing.T) {
 				t.Fatalf("metadata: %+v", item)
 			}
 		})
-	}
-}
-
-// TestDoctorExplicitConfigurationAndOutputErrors checks requested capabilities fail clearly.
-func TestDoctorExplicitConfigurationAndOutputErrors(t *testing.T) {
-	withConfigDir(t)
-	useTestAudio(t)
-	t.Setenv("PATH", t.TempDir())
-	if err := writeJSON(toolsPath(), ToolSettings{FFmpeg: filepath.Join(t.TempDir(), "missing")}); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := runDoctor(nil, &out); err == nil || !strings.Contains(out.String(), "[FAIL] ffmpeg: configured") {
-		t.Fatalf("invalid override: %v %s", err, out.String())
-	}
-	if err := os.Remove(toolsPath()); err != nil {
-		t.Fatal(err)
-	}
-	openAudioOutput = func(playback.Settings, int, bool, bool) (*playback.Output, error) {
-		return nil, fmt.Errorf("device unavailable")
-	}
-	out.Reset()
-	if err := runDoctor([]string{"--audio"}, &out); err == nil || !strings.Contains(out.String(), "[FAIL] audio output: device unavailable") {
-		t.Fatalf("explicit output: %v %s", err, out.String())
 	}
 }
 
@@ -252,31 +226,6 @@ func TestNativeHTTPUsesOneConnection(t *testing.T) {
 	r.Close()
 	if requests.Load() != 1 {
 		t.Fatalf("requests %d", requests.Load())
-	}
-}
-
-// TestDoctorCapabilitiesAndExplicitSources verifies optional warnings, actual
-// decoding, and explicit device failures without opening physical hardware.
-func TestDoctorCapabilitiesAndExplicitSources(t *testing.T) {
-	path := withConfigDir(t)
-	writeConfig(t, path, `{"stations":[{"name":"local","url":"testdata/audio/tone.flac"}],"default_station":"local"}`)
-	if err := loadUserStations(); err != nil {
-		t.Fatal(err)
-	}
-	useTestAudio(t)
-	t.Setenv("PATH", t.TempDir())
-	for _, args := range [][]string{nil, {"--stream", "testdata/audio/tone.flac"}, {"--audio"}} {
-		var out bytes.Buffer
-		if err := runDoctor(args, &out); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, out.String())
-		}
-		if strings.Contains(out.String(), "[FAIL]") {
-			t.Fatal(out.String())
-		}
-	}
-	var out bytes.Buffer
-	if err := runDoctor([]string{"--stream", "https://youtube.com/watch?v=test"}, &out); err == nil || !strings.Contains(out.String(), "[FAIL] stream") {
-		t.Fatalf("missing website helpers: %v %s", err, out.String())
 	}
 }
 

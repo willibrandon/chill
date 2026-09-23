@@ -105,7 +105,7 @@ type Status struct {
 	NowPlaying *streammeta.NowPlaying `json:"now_playing,omitempty"`
 	// Episode describes the selected podcast episode, if any.
 	Episode *podcast.Episode `json:"episode,omitempty"`
-	// Position is the finite-media playhead in seconds, excluding pauses.
+	// Position is the consumed audio playhead in seconds, excluding pauses.
 	Position float64 `json:"position,omitempty"`
 	// Duration is the finite-media length in seconds, or zero when unknown.
 	Duration float64 `json:"duration,omitempty"`
@@ -1223,6 +1223,9 @@ func (d *Daemon) status() string {
 	}
 	if s.State == "" {
 		s.State = "idle"
+	}
+	if native, ok := d.player.(*pcmPlayer); ok {
+		s.Position = native.position().Seconds()
 	}
 	if d.episode != nil {
 		s.Position, s.Duration, s.Seekable = d.episodePosition().Seconds(), d.episodeDuration.Seconds(), true
