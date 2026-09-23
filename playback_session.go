@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-var openAudioOutput = func(settings playback.Settings, volume int, muted, paused bool) (*playback.Output, error) {
-	return playback.NewOutput(settings, playback.OpenDevice, volume, muted, paused)
+func openAudioOutput(settings playback.Settings, volume int, muted, paused bool) (*playback.Output, error) {
+	return playback.NewOutput(settings, volume, muted, paused)
 }
 
 type pcmPlayer struct {
@@ -165,6 +165,19 @@ func (p *pcmPlayer) watch() {
 				p.emit(playerEvent{err: err.Error(), output: true})
 				return
 			}
+			id, _ := p.output.Position()
+			p.decoderMu.Lock()
+			active := p.active
+			p.decoderMu.Unlock()
+			if active != nil {
+				select {
+				case <-active.ready:
+					if id == active.id || p.output.Paused() {
+						p.announce(active)
+					}
+				default:
+				}
+			}
 			if n := p.output.ReadAnalysis(block[:]); n > 0 {
 				p.buffer.Push(block[:n])
 			}
@@ -280,11 +293,6 @@ func (p *pcmPlayer) transition(source string, offset time.Duration, finite bool)
 	close(d.selected)
 	p.decoderMu.Unlock()
 	d.start()
-	select {
-	case <-d.ready:
-		p.announce(d)
-	default:
-	}
 	return true
 }
 func (p *pcmPlayer) artwork() string {
@@ -341,11 +349,6 @@ func (p *pcmPlayer) decode(d *preparedDecoder) error {
 					return d.ctx.Err()
 				}
 				ready = true
-				select {
-				case <-d.selected:
-					p.announce(d)
-				default:
-				}
 			}
 			if p.audio.Mono {
 				for i := 0; i+8 <= n; i += 8 {

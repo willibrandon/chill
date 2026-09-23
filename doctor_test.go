@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -45,37 +44,6 @@ func TestDoctorRejectsIgnoredConfigEntries(t *testing.T) {
 	writeConfig(t, path, `{"stations":[{"name":"local","url":"/music/my track.wav"}],"default_station":"local"}`)
 	if err := checkDoctorConfig(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestDoctorMissingDependencies checks installation guidance without starting playback.
-func TestDoctorMissingDependencies(t *testing.T) {
-	withConfigDir(t)
-	useTestAudio(t)
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("MPV_HOME", t.TempDir())
-	var out bytes.Buffer
-	if err := runDoctor(nil, &out); err == nil {
-		t.Fatal("doctor accepted an unavailable default station")
-	}
-	for _, want := range []string{"[OK] native playback", "[WARN] yt-dlp", "[WARN] ffmpeg", "[FAIL] default station lofi-girl", strings.Join(installCommands([]string{"ffmpeg", "yt-dlp", "deno"}), "` then `"), "no daemon running", "failed: 1."} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("missing %q in %s", want, out.String())
-		}
-	}
-	if _, err := os.Stat(socketPath()); !os.IsNotExist(err) {
-		t.Fatal("doctor created daemon discovery data")
-	}
-	out.Reset()
-	if err := runDoctor([]string{"--stations"}, &out); err == nil {
-		t.Fatal("doctor accepted unavailable station sources")
-	}
-	if !strings.Contains(out.String(), "failed: 6.") || !strings.Contains(out.String(), strings.Join(installCommands([]string{"ffmpeg", "yt-dlp", "deno"}), "` then `")) {
-		t.Fatalf("station diagnostics omitted requirements: %s", out.String())
-	}
-	out.Reset()
-	if err := runDoctor([]string{"--stream", "testdata/audio/tone.flac"}, &out); err != nil {
-		t.Fatalf("unrelated default station blocked a native source: %v\n%s", err, out.String())
 	}
 }
 

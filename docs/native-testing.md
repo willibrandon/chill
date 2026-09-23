@@ -1,66 +1,55 @@
-# Native playback validation
+# Playback validation
 
-Build with Go and a C compiler, with CGO enabled. Release builds contain the
-native backend; consumers do not need the compiler or development headers.
-Linux release binaries target glibc 2.31 or newer and use installed PulseAudio
-or ALSA runtime libraries. Windows releases use the UCRT available on Windows 10
-and later. Releases retain AMD64 and ARM64 assets for Linux, macOS, and Windows.
+`go build -o ./chill .` and `go vet ./...` check compilation. They do not check sound.
+The source tests use actual decoders and generated media files. No substitute
+player or silent output backend is installed by the test suite.
+
+The default suite is silent and does not start players, access live stations,
+or build another executable:
 
 ```sh
-go build .
-go vet ./...
 go test ./...
 go test -race ./...
-go test ./internal/playback -run '^$' -bench BenchmarkOutputCallback -benchmem
-python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-Native codec tests use committed generated fixtures and explicitly hide helper
-executables. Additional AAC podcast integration tests run when FFmpeg is
-installed. Normal CI installs it so this coverage cannot be accidentally skipped.
-The separate YouTube workflow checks actual external-service behavior.
-
-Regression coverage checks malformed decoder inputs, cubic volume gain,
-downsampling alias rejection, MP3 delay/padding and reference alignment,
-chained Vorbis audio and tags, queue changes during output drain, HTTP idle
-timeouts, portable extractor discovery, and configured FFmpeg propagation.
-For an extended malformed-input check, run:
+Audible integration checks are separate. Run them explicitly on macOS 14.2 or
+newer with a physical audio output, FFmpeg, yt-dlp, and clang:
 
 ```sh
-go test ./internal/playback -run '^$' -fuzz FuzzNativeDecoders -fuzztime 30s
+go test -tags audio_integration -run '^TestMacOSStationPlayback$' .
+# Or check an already-built binary without building it again:
+python3 scripts/check_macos_playback.py --binary ./chill --report /tmp/chill-audio.json
 ```
 
-## CLI integration
+These commands play test tones and music. The default tests never invoke them.
+The integration harness uses two-second measurements and stops on the first
+failure, including a race detector report.
 
-```sh
-go build -tags chill_test_audio -o /tmp/chill-native .
-python3 .github/scripts/playback.py --binary /tmp/chill-native
-```
+The macOS integration tests use a separate CoreAudio process tap to measure the application's
+output. They exercise an HTTP audio file, pause/resume, mute/unmute, sample-rate
+changes, and the built-in Chillhop station. Each audible window must contain at
+least 90% nonzero samples and a measurable signal, and the playback clock must
+advance. Paused and muted output must be silent. Missing output or unavailable
+measurement is a failure. No microphone recording is made or retained.
 
-The harness enables a paced null output through `CHILL_TEST_AUDIO=null`. This
-backend is compiled only with `chill_test_audio`; release builds ignore that
-environment variable. The ordinary unit suite injects its own test devices.
-The harness covers playback, pause, volume, mute, EQ, sleep, podcasts, seeking,
-speed, queues, and process cleanup. `--legacy-bin-dir` adds old-to-new daemon
-upgrade coverage; only that test job installs the historical output dependency.
+The script uses a temporary `CHILL_CONFIG_DIR` and runtime directory, starts the
+actual built daemon, and stops it afterward. It does not edit the listening
+profile used by your normal session. `--local-only` omits the external station;
+it is useful for separating a network failure from a device failure.
 
-## Native output and release checks
+`chill status --json` includes output sample counts, queued frames, missing frames,
+last output pull age, and peak level. These measure the application's delivery to
+the driver. They are diagnostic evidence, not a substitute for the independent
+CoreAudio measurement or an acoustic listening check.
 
-CI opens an actual Linux native backend through a virtual PulseAudio sink.
-Before a stable release, run these checks on macOS and Windows hardware too:
+Hosted CI runs the default source tests and build checks. Physical output tests
+require the `audio_integration` build tag; a green hosted job does not establish
+working sound.
+The separate **macOS playback** workflow requires a self-hosted macOS runner with
+an `audio` label and a physical output. No virtual or silent device is used.
 
-1. Run `chill doctor --audio` and play each native fixture with helper tools absent.
-2. Exercise device selection, pause/resume, and each audio profile in daemon and
-   foreground modes; confirm device changes do not change system routing.
-3. Disconnect and reconnect a selected device; confirm fallback and return.
-4. Check exclusive mode on a supporting device and rejection on an unsupported one.
-5. Listen to speech and music at 0.5×, 1×, 1.5×, and 3×, including changes mid-track.
-6. Check gapless local transitions, seeking, EOF tails, and visualizer timing.
-7. Upgrade an active daemon and verify queue, position, pause, speed, volume, EQ,
-   device preferences, and the sleep deadline.
-
-CI builds and tests on AMD64 and ARM64 runners for all three operating systems.
-Release jobs build native audio for all six targets, report dynamic-library
-imports, and execute each archive on a matching runner before publishing.
-Archive names and checksums remain compatible with existing updates, and package
-updates preserve unrelated Homebrew/Scoop dependencies.
+The playback comparison reference is the read-only CLIAMP checkout at commit
+`57ae3badf75f1f370178df34c6382c069e6564aa`. Chill's default macOS output follows
+its Beep/Oto AudioQueue approach, persistent process context, native device sample
+rate selection, and asynchronous output error checking. The adapted rate query's
+MIT notice is in `internal/playback/LICENSE.cliamp`.

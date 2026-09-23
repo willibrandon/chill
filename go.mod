@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
+	github.com/ebitengine/oto/v3 v3.4.1
 	github.com/gen2brain/malgo v0.11.26
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gopxl/beep/v2 v2.1.1
@@ -28,6 +29,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/ebitengine/purego v0.9.0 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect

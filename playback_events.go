@@ -16,8 +16,7 @@ type playerEvent struct {
 	nowPlaying *streammeta.NowPlaying
 }
 
-// player keeps audio implementation separate from daemon state, and lets tests
-// exercise reconnects without a network stream or an audio device.
+// player is the playback controller used by the foreground UI and daemon.
 type player interface {
 	load(string) error
 	setPaused(bool) error

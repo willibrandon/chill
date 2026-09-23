@@ -113,7 +113,7 @@ func Devices(ctx context.Context) ([]DeviceInfo, error) {
 }
 
 // OpenDevice prepares a native device without changing system-wide routing.
-func OpenDevice(settings Settings, render func([]byte)) (Device, error) {
+func openNativeDevice(settings Settings, render func([]byte)) (Device, error) {
 	var last error
 	for _, b := range backends() {
 		if settings.Device != "" && settings.Device != "auto" && !strings.HasPrefix(settings.Device, b.name+"/") {

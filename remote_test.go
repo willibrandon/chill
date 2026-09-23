@@ -67,7 +67,7 @@ func TestRemoteQueueRevisionConflict(t *testing.T) {
 	library.QueueRevision = 17
 	station := itemFromStation(Station{Name: "live", Desc: "Live", URL: "https://example.com/live"})
 	d := &Daemon{library: library, queueRevision: library.QueueRevision, current: &station, station: station.Station}
-	item := testTrack(filepath.Join(t.TempDir(), "one.flac"), "One")
+	item := MediaItem{Kind: MediaTrack, Source: filepath.Join(t.TempDir(), "one.flac"), Title: "One"}
 	result, err := d.performRemoteOperation(context.Background(), "queue.append", map[string]any{"items": []MediaItem{item}, "if_revision": uint64(17)}, nil)
 	if err != nil || result == nil || d.queueRevision != 18 {
 		t.Fatalf("append result = %#v, revision = %d, err = %v", result, d.queueRevision, err)
@@ -83,7 +83,7 @@ func TestAutomaticQueueConsumptionAdvancesRevision(t *testing.T) {
 	withConfigDir(t)
 	library := emptyLibrary()
 	library.QueueRevision = 8
-	library.Queue = []MediaItem{testTrack(filepath.Join(t.TempDir(), "one.flac"), "One")}
+	library.Queue = []MediaItem{MediaItem{Kind: MediaTrack, Source: filepath.Join(t.TempDir(), "one.flac"), Title: "One"}}
 	d := &Daemon{library: library, queueRevision: library.QueueRevision}
 	d.ensureQueueFingerprint()
 	d.mu.Lock()

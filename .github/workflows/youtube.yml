@@ -1,14 +1,14 @@
-name: YouTube smoke test
+name: macOS playback
 
-# Live extraction depends on YouTube availability and access from hosted runners.
-# Keep this explicit external-service check separate from deterministic CI.
+# Requires an actual macOS audio device. Never replace output with a null sink.
+# A CoreAudio process tap measures the built application independently.
 on:
   workflow_dispatch:
     inputs:
       url:
         description: YouTube stream URL
         required: true
-        default: https://www.youtube.com/watch?v=rFZHOHl-L8A
+        default: https://www.youtube.com/watch?v=5yx6BWlEVcY
       stations:
         description: Also check resolution of every built-in station
         type: boolean
@@ -16,7 +16,7 @@ on:
 
 jobs:
   playback:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, audio]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7.0.1
@@ -31,22 +31,22 @@ jobs:
           deno-version: v2.9.7
       - name: Install playback dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffmpeg
+          command -v clang
           python -m pip install --upgrade "yt-dlp[default]"
           ffmpeg -version
           ffprobe -version
           yt-dlp --version
           deno --version
       - name: Build
-        run: go build -v -tags chill_test_audio .
+        run: go build -v .
       - name: Audit built-in station resolution
         if: inputs.stations
         run: ./chill doctor --stations
       - name: Verify live YouTube playback
         env:
           STREAM_URL: ${{ inputs.url }}
-        run: python .github/scripts/playback.py --youtube "$STREAM_URL"
+        run: python scripts/check_macos_playback.py --source "$STREAM_URL"
       - name: Extract YouTube diagnostics on failure
         if: failure()
         env:

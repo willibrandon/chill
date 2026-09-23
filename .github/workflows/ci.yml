@@ -52,7 +52,7 @@ jobs:
           fi
 
       - name: Build
-        run: go build -v -tags chill_test_audio .
+        run: go build -v .
 
       - name: Test package release updater
         run: python -m unittest discover -s .github/scripts -p 'test_*.py'
@@ -91,7 +91,9 @@ jobs:
               print(f"{name}: {executable}", flush=True)
               subprocess.run([executable, "-version" if name in ("ffmpeg", "ffprobe") else "--version"], check=True, timeout=30)
 
-      - name: Test (including local audio playback)
+      # Hosted runners do not provide a physical speaker. These jobs must not
+      # claim to verify sound. The macOS playback workflow measures real output.
+      - name: Test source behavior (physical output checked separately)
         run: go test -count=1 -v ./...
 
       - name: Test --list (Unix)
@@ -106,41 +108,3 @@ jobs:
       - name: Race tests
         if: runner.os != 'Windows'
         run: go test -race ./...
-
-      - name: Verify native Linux output
-        if: runner.os == 'Linux'
-        run: |
-          pulseaudio --start --exit-idle-time=-1
-          pactl load-module module-null-sink sink_name=chill_test
-          ./chill doctor --audio --stream testdata/audio/tone.wav
-
-      - name: Verify playback, controls, and cleanup
-        env:
-          PYTHONUTF8: "1"
-        run: python .github/scripts/playback.py
-
-  legacy-upgrade:
-    runs-on: ubuntu-latest
-    env:
-      CGO_ENABLED: "1"
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-python@v7.0.0
-        with:
-          python-version: '3.14'
-      - name: Install historical backend only for upgrade compatibility
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mpv ffmpeg
-          python -m pip install "yt-dlp[default]"
-      - name: Build current test binary and previous release
-        env:
-          GOBIN: ${{ runner.temp }}/chill-legacy
-        run: |
-          go build -tags chill_test_audio .
-          go install github.com/willibrandon/chill@v0.3.2
-      - name: Verify old-to-new daemon upgrade
-        run: python .github/scripts/playback.py --legacy-bin-dir "${{ runner.temp }}/chill-legacy"

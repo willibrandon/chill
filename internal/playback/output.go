@@ -43,9 +43,6 @@ type Device interface {
 	Info() DeviceInfo
 }
 
-// DeviceFactory prepares a device using the supplied PCM callback.
-type DeviceFactory func(Settings, func([]byte)) (Device, error)
-
 type streamToken struct {
 	id   uint64
 	done <-chan struct{}
@@ -62,22 +59,25 @@ type sample struct {
 // Output has one producer and one audio callback consumer. Device changes are
 // serialized, and stop the old callback before starting the replacement.
 type Output struct {
-	settings      Settings
-	factory       DeviceFactory
-	device        Device
-	mu            sync.Mutex
-	closed        bool
-	frames        []sample
-	writeToken    *streamToken
-	read, written atomic.Uint64
-	track         atomic.Uint64
-	position      atomic.Int64
-	clockVersion  atomic.Uint64
-	paused, muted atomic.Bool
-	volume        atomic.Uint64
-	underruns     atomic.Uint64
-	wake          chan struct{}
-	done          chan struct{}
+	createdAt                   time.Time
+	settings                    Settings
+	device                      Device
+	mu                          sync.Mutex
+	closed                      bool
+	frames                      []sample
+	writeToken                  *streamToken
+	read, written               atomic.Uint64
+	track                       atomic.Uint64
+	position                    atomic.Int64
+	clockVersion                atomic.Uint64
+	paused, muted               atomic.Bool
+	volume                      atomic.Uint64
+	underruns                   atomic.Uint64
+	submitted, nonzero, missing atomic.Uint64
+	lastPull                    atomic.Int64
+	peak                        atomic.Uint64
+	wake                        chan struct{}
+	done                        chan struct{}
 	// Analysis is a separate SPSC ring. A slow reader drops new analysis
 	// samples, never delaying the device or overwriting an unread slot.
 	analysis                      []sample
@@ -85,16 +85,16 @@ type Output struct {
 }
 
 // NewOutput opens a device and creates bounded sample and analysis queues.
-func NewOutput(settings Settings, factory DeviceFactory, volume int, muted, paused bool) (*Output, error) {
+func NewOutput(settings Settings, volume int, muted, paused bool) (*Output, error) {
 	if settings.SampleRate <= 0 || settings.BufferMS < 1 {
 		return nil, errors.New("invalid audio output settings")
 	}
 	n := max(2048, settings.SampleRate*settings.BufferMS/1000)
-	o := &Output{settings: settings, factory: factory, frames: make([]sample, n), analysis: make([]sample, 8192), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	o := &Output{createdAt: time.Now(), settings: settings, frames: make([]sample, n), analysis: make([]sample, 8192), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	o.SetVolume(volume)
 	o.SetMuted(muted)
 	o.SetPaused(paused)
-	dev, err := factory(settings, o.render)
+	dev, err := OpenDevice(settings, o.render)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +117,9 @@ func (o *Output) SetMuted(muted bool) { o.muted.Store(muted) }
 
 // SetPaused controls consumption without discarding queued samples.
 func (o *Output) SetPaused(paused bool) { o.paused.Store(paused) }
+
+// Paused reports whether queued samples are being retained.
+func (o *Output) Paused() bool { return o.paused.Load() }
 
 // Position returns the consumed track and its source-time cursor.
 func (o *Output) Position() (uint64, time.Duration) {
@@ -143,7 +146,18 @@ func (o *Output) Err() error {
 		return errors.New("audio output is unavailable")
 	}
 	if device, ok := o.device.(interface{ Err() error }); ok {
-		return device.Err()
+		if err := device.Err(); err != nil {
+			return err
+		}
+	}
+	if !o.paused.Load() && o.written.Load() > o.read.Load() {
+		last := o.createdAt
+		if at := o.lastPull.Load(); at > 0 {
+			last = time.Unix(0, at)
+		}
+		if time.Since(last) > 5*time.Second {
+			return errors.New("audio output stopped consuming samples")
+		}
 	}
 	return nil
 }
@@ -230,6 +244,7 @@ func (o *Output) Drain(ctx context.Context, through uint64) error {
 
 func (o *Output) render(dst []byte) {
 	clear(dst)
+	o.lastPull.Store(time.Now().UnixNano())
 	if o.paused.Load() {
 		return
 	}
@@ -241,6 +256,8 @@ func (o *Output) render(dst []byte) {
 	}
 	aw, ar := o.analysisWritten.Load(), o.analysisRead.Load()
 	var last sample
+	var nonzero uint64
+	var peak float64
 	for r < w && n < len(dst)/8 {
 		f := o.frames[r%uint64(len(o.frames))]
 		select {
@@ -256,6 +273,10 @@ func (o *Output) render(dst []byte) {
 		if math.IsNaN(float64(right)) || math.IsInf(float64(right), 0) {
 			right = 0
 		}
+		if left != 0 || right != 0 {
+			nonzero++
+		}
+		peak = max(peak, math.Abs(float64(left)), math.Abs(float64(right)))
 		if gain != 0 {
 			binary.LittleEndian.PutUint32(dst[n*8:], math.Float32bits(min(1, max(-1, left))))
 			binary.LittleEndian.PutUint32(dst[n*8+4:], math.Float32bits(min(1, max(-1, right))))
@@ -274,10 +295,14 @@ func (o *Output) render(dst []byte) {
 		o.track.Store(last.track)
 		o.clockVersion.Add(1)
 	}
+	o.submitted.Add(uint64(n))
+	o.nonzero.Add(nonzero)
+	o.peak.Store(math.Float64bits(peak))
 	o.analysisWritten.Store(aw)
 	o.read.Store(r)
 	if n < len(dst)/8 {
 		o.underruns.Add(1)
+		o.missing.Add(uint64(len(dst)/8 - n))
 	}
 	select {
 	case o.wake <- struct{}{}:
@@ -310,7 +335,7 @@ func (o *Output) SetDevice(id string) error {
 	settings.Device = id
 	// Prepare while the current device is still available. If exclusive mode
 	// prevents this, retain the working output and return the error.
-	next, err := o.factory(settings, o.render)
+	next, err := OpenDevice(settings, o.render)
 	if err != nil {
 		return err
 	}
@@ -321,7 +346,7 @@ func (o *Output) SetDevice(id string) error {
 	o.device = nil
 	if err = next.Start(); err != nil {
 		next.Close()
-		restored, restoreErr := o.factory(o.settings, o.render)
+		restored, restoreErr := OpenDevice(o.settings, o.render)
 		if restoreErr == nil {
 			restoreErr = restored.Start()
 			if restoreErr == nil {
@@ -350,4 +375,31 @@ func (o *Output) Close() {
 		o.device.Close()
 		o.device = nil
 	}
+}
+
+// Statistics describes samples supplied to the output driver. It does not claim
+// that the speakers produced sound; the independent OS check measures that.
+type Statistics struct {
+	// SubmittedFrames counts source frames supplied to the driver.
+	SubmittedFrames uint64 `json:"submitted_frames"`
+	// NonzeroFrames counts submitted frames with a nonzero output sample.
+	NonzeroFrames uint64 `json:"nonzero_frames"`
+	// UnderrunFrames counts requested frames unavailable in the source queue.
+	UnderrunFrames uint64 `json:"underrun_frames"`
+	// QueuedFrames reports source frames waiting for the driver.
+	QueuedFrames uint64 `json:"queued_frames"`
+	// LastPullMS is the age of the last driver read, or -1 before the first read.
+	LastPullMS int64 `json:"last_pull_ms"`
+	// Peak is the greatest absolute sample value in the last submitted block.
+	Peak float64 `json:"peak"`
+}
+
+// Statistics returns the current queue and driver delivery measurements.
+func (o *Output) Statistics() Statistics {
+	read, written := o.read.Load(), o.written.Load()
+	age := int64(-1)
+	if last := o.lastPull.Load(); last > 0 {
+		age = max(0, time.Since(time.Unix(0, last)).Milliseconds())
+	}
+	return Statistics{SubmittedFrames: o.submitted.Load(), NonzeroFrames: o.nonzero.Load(), UnderrunFrames: o.missing.Load(), QueuedFrames: written - read, LastPullMS: age, Peak: math.Float64frombits(o.peak.Load())}
 }

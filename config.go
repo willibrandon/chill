@@ -49,13 +49,25 @@ func defaultStation() string {
 	return configuredDefault
 }
 
+// chillConfigDir allows a separate application profile without changing HOME.
+func chillConfigDir() (string, error) {
+	if dir := os.Getenv("CHILL_CONFIG_DIR"); dir != "" {
+		return filepath.Abs(dir)
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "chill"), nil
+}
+
 // configPath is where stations.json lives, "" when there is no config dir.
 func configPath() string {
-	dir, err := os.UserConfigDir()
+	dir, err := chillConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(dir, "chill", "stations.json")
+	return filepath.Join(dir, "stations.json")
 }
 
 // loadConfig reads the config file. A missing file is not an error.
