@@ -45,7 +45,7 @@ jobs:
             CC="clang -arch $clang_arch" GOOS=darwin GOARCH=$arch CGO_ENABLED=1 \
               go build -trimpath -ldflags "-s -w" -o "$out/$name/chill" .
             otool -L "$out/$name/chill"
-            cp README.md "$out/$name/"
+            cp README.md LICENSE internal/playback/LICENSE.cliamp "$out/$name/"
             tar -C "$out" -czf "$out/$name.tar.gz" "$name"
           done
 
@@ -96,7 +96,7 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o "$out/$name/chill" .
           "$out/$name/chill" --version
           ldd "$out/$name/chill"
-          cp README.md "$out/$name/"
+          cp README.md LICENSE internal/playback/LICENSE.cliamp "$out/$name/"
           tar -C "$out" -czf "$out/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
@@ -138,7 +138,7 @@ jobs:
               echo 'Unexpected compiler runtime DLL dependency'
               exit 1
             fi
-            cp README.md "$out/$name/"
+            cp README.md LICENSE internal/playback/LICENSE.cliamp "$out/$name/"
             (cd "$out" && zip -qr "$name.zip" "$name")
           done
       - uses: actions/upload-artifact@v4
