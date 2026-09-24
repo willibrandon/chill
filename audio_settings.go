@@ -60,6 +60,9 @@ type AudioStatus struct {
 	OutputWarning string `json:"output_warning,omitempty"`
 	// DeviceSampleRate reports the rate negotiated with the native backend.
 	DeviceSampleRate int `json:"device_sample_rate,omitzero"`
+	// OutputLatencyMS is how long samples handed to the backend stay in its
+	// buffers before they play. The device's own latency is not included.
+	OutputLatencyMS int64 `json:"output_latency_ms,omitzero"`
 	// Output reports sample delivery to the driver, not acoustic audibility.
 	Output *playback.Statistics `json:"output,omitempty"`
 	AudioSettings
@@ -159,6 +162,7 @@ func activeAudioStatus(settings AudioSettings, selected string, p player) AudioS
 		status.Backend = info.Backend
 		status.ActiveExclusive = info.Exclusive
 		status.DeviceSampleRate = info.SampleRate
+		status.OutputLatencyMS = info.Latency.Milliseconds()
 	}
 	if status.ActiveDevice != status.Device {
 		status.OutputWarning = fmt.Sprintf("audio device %q unavailable; using %s", status.Device, status.ActiveDevice)
