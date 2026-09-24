@@ -75,7 +75,11 @@ previous configuration. PulseAudio shared outputs do not support exclusive mode.
 The Lossless profile increases processing precision and sample rate; system
 mixers and device conversion may still apply. `active_sample_rate` is the PCM
 pipeline rate; `device_sample_rate` is the rate negotiated with the audio backend.
-JSON audio status also reports `backend` and `active_exclusive`.
+JSON audio status also reports `backend`, `active_exclusive`, and
+`output_latency_ms`: how long samples stay in the backend's buffers after Chill
+hands them over, which is also how far the visualizer and `runtime.spectrum`
+run ahead of the backend's output. The output device's own latency, which is
+large for Bluetooth, comes on top.
 
 Use `chill doctor --audio` to explicitly open and close the chosen output without
 playing sound. Plain `chill doctor` only enumerates devices.
