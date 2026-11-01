@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/atotto/clipboard v0.1.4
@@ -12,12 +12,12 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/ebitengine/oto/v3 v3.5.1
-	github.com/gen2brain/malgo v0.11.26
+	github.com/gen2brain/malgo v0.11.27
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/jfreymuth/oggvorbis v1.0.5
 	golang.org/x/mod v0.42.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 )
