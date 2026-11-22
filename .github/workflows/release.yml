@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
 
@@ -82,7 +82,7 @@ jobs:
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
       - name: Build against glibc 2.31
@@ -113,7 +113,7 @@ jobs:
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
-      - uses: actions/setup-go@v7.0.0
+      - uses: actions/setup-go@v7.1.0
         with:
           go-version-file: go.mod
       - name: Install pinned LLVM-MinGW UCRT toolchain
